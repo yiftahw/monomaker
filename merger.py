@@ -94,12 +94,36 @@ def generate_branch_report(config: Config, output_file: str = None):
     else:
         print(report_json)
 
+def clone_and_validate_monorepo(monorepo_url: str, repo_path: str):
+    """Clone monorepo and validate it's empty or nearly empty."""
+    print(f"Cloning monorepo from {monorepo_url}...")
+    
+    if os.path.exists(repo_path):
+        raise Exception(f"Directory {repo_path} already exists. Please remove it first.")
+    
+    exec_cmd(f"git clone {monorepo_url} {repo_path}")
+    
+    # Validate the monorepo is empty or nearly empty
+    allowed_files = {'.git', 'README.md', 'README', '.gitignore', '.gitattributes'}
+    actual_files = set(os.listdir(repo_path))
+    unexpected_files = actual_files - allowed_files
+    
+    if unexpected_files:
+        raise Exception(f"Monorepo is not empty. Found unexpected files: {', '.join(unexpected_files)}. "
+                       f"Only README, .gitignore, and .gitattributes are allowed.")
+    
+    print("Monorepo validated as empty.")
+
 def merge_repositories(config: Config):
     """Merge all repositories into a monorepo."""
-    # create the monorepo directory
     repo_path = os.path.join(THIS_SCRIPT_DIR, config.monorepo_name)
     
-    create_empty_repo(repo_path)
+    # Clone or create the monorepo
+    if config.monorepo_url:
+        clone_and_validate_monorepo(config.monorepo_url, repo_path)
+    else:
+        print("No monorepo_url specified, creating empty repository...")
+        create_empty_repo(repo_path)
     
     # Get all branches for each repository and merge them
     for repo in config.repositories:

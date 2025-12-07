@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from dataclasses_json import dataclass_json
+from typing import Optional
 
 
 @dataclass_json
@@ -14,3 +15,4 @@ class RepoConfig:
 class Config:
     monorepo_name: str
     repositories: list[RepoConfig]
+    monorepo_url: Optional[str] = None
