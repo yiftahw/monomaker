@@ -1,2 +1,4 @@
 config.json
+report.json
+sandbox/
 __pycache__/

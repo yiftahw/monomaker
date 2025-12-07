@@ -1,8 +1,10 @@
 import os
 import json
-from dataclasses import dataclass
-from dataclasses_json import dataclass_json
 import atexit
+import subprocess
+import argparse
+
+from models import Config, RepoConfig, RepositoryReport, RepositoryReportEntry
 
 # TODO: maybe add a step that downloads git-filter-repo if not present from raw.githubusercontent.com
 GIT_FILTER_REPO = os.path.join(os.path.expanduser("~"), "git-filter-repo")
@@ -20,10 +22,13 @@ def exec_cmd(cmd: str):
     return ret
     
 def create_empty_repo(path: str):
+    curr_dir = os.getcwd()
     if not os.path.exists(path):
         os.makedirs(path)
     os.chdir(path)
-    return exec_cmd("git init")
+    ret = exec_cmd("git init")
+    os.chdir(curr_dir)
+    return ret
 
 def import_repo_branch(monorepo_root: str, repo_url: str, branch: str, subdirectory: str):
     # clone the submodule as a temporary repo
@@ -49,32 +54,79 @@ def import_repo_branch(monorepo_root: str, repo_url: str, branch: str, subdirect
     exec_cmd(f"git remote remove {subdirectory}")
     exec_cmd(f"rm -rf {subdirectory_dir}")
 
-@dataclass_json
-@dataclass
-class RepoConfig:
-    path: str
-    url: str
-    branch: str
+def get_all_branches_in_origin(url: str) -> list[str]:
+    cmd = f"git ls-remote --heads {url}"
+    result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+    if result.returncode != 0:
+        raise Exception(f"Failed to get branches from {url}: {result.stderr}")
+    branches = []
+    for _, ref in (line.split() for line in result.stdout.splitlines()):
+        # use only the branch name, i.e discard refs/heads/, and ignore HEAD
+        if ref.startswith("refs/heads/"):
+            branch_name = ref[len("refs/heads/"):]
+            branches.append(branch_name)
+    return branches
 
-@dataclass_json
-@dataclass
-class Config:
-    monorepo_name: str
-    repositories: list[RepoConfig]
+def generate_branch_report(config: Config, output_file: str = None):
+    """Generate a report of all branches for each repository."""
+    report = RepositoryReport(repositories=[])
+    
+    for repo in config.repositories:
+        branches = get_all_branches_in_origin(repo.url)
+        report.repositories.append(RepositoryReportEntry(url=repo.url, branches=branches))
+    
+    report_json = report.to_json(indent=4)
+    
+    if output_file:
+        with open(output_file, "w") as f:
+            f.write(report_json)
+        print(f"Branch report generated at {output_file}")
+    else:
+        print(report_json)
 
-with open("config.json", "r") as f:
-    config: Config = Config.from_json(f.read())
+def merge_repositories(config: Config):
+    """Merge all repositories into a monorepo."""
+    # create the monorepo directory
+    # TODO: different strategy to start the monorepo?
+    repo_path = os.path.join(THIS_SCRIPT_DIR, config.monorepo_name)
+    
+    create_empty_repo(repo_path)
+    
+    # merge all repos with git-filter-repo
+    for repo in config.repositories:
+        import_repo_branch(repo_path, repo.url, repo.branch, repo.path)
+    
+    print(f"Repositories merged into {repo_path}")
 
-if config is None or len(config.repositories) == 0:
-    raise Exception("Failed to load config or no repositories defined")
+def main():
+    parser = argparse.ArgumentParser(description="Monorepo maker - merge multiple repositories into one")
+    
+    subparsers = parser.add_subparsers(dest="command", required=True)
+    
+    # Branch report command
+    branch_parser = subparsers.add_parser("branch-report", aliases=["b"],
+                                          help="Generate a report of all branches for each repository")
+    branch_parser.add_argument("-o", "--output", type=str, metavar="FILE",
+                              help="Output file for branch report (if not specified, prints to console)")
+    
+    # Merge command
+    merge_parser = subparsers.add_parser("merge", aliases=["m"],
+                                         help="Merge all repositories into a monorepo")
+    
+    args = parser.parse_args()
+    
+    # Load configuration
+    with open("config.json", "r") as f:
+        config: Config = Config.from_json(f.read())
+    
+    if config is None or len(config.repositories) == 0:
+        raise Exception("Failed to load config or no repositories defined")
+    
+    # Execute the requested command
+    if args.command in ["branch-report", "b"]:
+        generate_branch_report(config, args.output)
+    elif args.command in ["merge", "m"]:
+        merge_repositories(config)
 
-# create the monorepo directory
-# TODO: different strategy to start the monorepo?
-repo_path = os.path.join(THIS_SCRIPT_DIR, config.monorepo_name)
-
-create_empty_repo(repo_path)
-
-# merge all repos with git-filter-repo
-for index, repo in enumerate(config.repositories):
-    import_repo_branch(repo_path, repo.url, repo.branch, repo.path)
-
+if __name__ == "__main__":
+    main()
