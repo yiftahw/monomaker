@@ -7,7 +7,6 @@ from dataclasses_json import dataclass_json
 class RepoConfig:
     path: str
     url: str
-    branch: str
 
 
 @dataclass_json

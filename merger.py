@@ -67,6 +67,16 @@ def get_all_branches_in_origin(url: str) -> list[str]:
             branches.append(branch_name)
     return branches
 
+def load_config(config_file: str = "config.json") -> Config:
+    """Load and validate configuration from JSON file."""
+    with open(config_file, "r") as f:
+        config = Config.from_json(f.read())
+    
+    if not config or not config.repositories:
+        raise ValueError("Configuration is empty or has no repositories defined")
+    
+    return config
+
 def generate_branch_report(config: Config, output_file: str = None):
     """Generate a report of all branches for each repository."""
     report = RepositoryReport(repositories=[])
@@ -87,16 +97,21 @@ def generate_branch_report(config: Config, output_file: str = None):
 def merge_repositories(config: Config):
     """Merge all repositories into a monorepo."""
     # create the monorepo directory
-    # TODO: different strategy to start the monorepo?
     repo_path = os.path.join(THIS_SCRIPT_DIR, config.monorepo_name)
     
     create_empty_repo(repo_path)
     
-    # merge all repos with git-filter-repo
+    # Get all branches for each repository and merge them
     for repo in config.repositories:
-        import_repo_branch(repo_path, repo.url, repo.branch, repo.path)
+        print(f"\nProcessing repository: {repo.url}")
+        branches = get_all_branches_in_origin(repo.url)
+        print(f"Found {len(branches)} branches: {', '.join(branches)}")
+        
+        for branch in branches:
+            print(f"\n  Merging branch: {branch}")
+            import_repo_branch(repo_path, repo.url, branch, repo.path)
     
-    print(f"Repositories merged into {repo_path}")
+    print(f"\nAll repositories and branches merged into {repo_path}")
 
 def main():
     parser = argparse.ArgumentParser(description="Monorepo maker - merge multiple repositories into one")
@@ -116,11 +131,17 @@ def main():
     args = parser.parse_args()
     
     # Load configuration
-    with open("config.json", "r") as f:
-        config: Config = Config.from_json(f.read())
-    
-    if config is None or len(config.repositories) == 0:
-        raise Exception("Failed to load config or no repositories defined")
+    try:
+        config = load_config()
+    except FileNotFoundError:
+        print("Error: config.json not found")
+        return
+    except ValueError as e:
+        print(f"Error: {e}")
+        return
+    except Exception as e:
+        print(f"Error loading config.json: {e}")
+        return
     
     # Execute the requested command
     if args.command in ["branch-report", "b"]:
