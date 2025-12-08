@@ -3,7 +3,7 @@ import os
 import subprocess
 import argparse
 import atexit
-from typing import List
+from typing import List, Optional
 from models import *
 from models.repository import SubmoduleDef
 from pprint import pprint
@@ -22,27 +22,6 @@ atexit.register(lambda: os.system(f"rm -rf {SANDBOX_DIR}"))
 
 def ensure_dir(path: str):
     os.makedirs(path, exist_ok=True)
-
-# ---------- Repo helpers ----------
-def create_empty_repo(path: str):
-    ensure_dir(path)
-    exec_cmd("git init", cwd=path)
-
-def clone_repo_once(repo_url: str, local_dir: str):
-    """
-    Clone the repo once into local_dir if not present. Uses --no-checkout so we can
-    create worktrees cheaply.
-    """
-    if os.path.exists(local_dir):
-        # fetch/refresh
-        exec_cmd("git fetch --all --prune", cwd=local_dir)
-        return local_dir
-
-    ensure_dir(os.path.dirname(local_dir))
-    exec_cmd(f"git clone --no-checkout {repo_url} {local_dir}")
-    # ensure we have all branches
-    exec_cmd("git fetch --all --prune", cwd=local_dir)
-    return local_dir
 
 def get_all_branches(repo_path: str, verbose: bool = False) -> List[str]:
     cmd = "git branch -a"
@@ -80,83 +59,6 @@ def get_all_submodules(repo_path: str) -> List[SubmoduleDef]:
                 if url:
                     submodules.append(SubmoduleDef(path=path, url=url))
     return submodules
-
-# ---------- Subrepo import using one clone + worktrees ----------
-def import_repo_all_branches(monorepo_root: str, repo_url: str, subdir: str):
-    return # TODO: re-implement later
-    """
-    Clone the repo once into SANDBOX_DIR/<subdir>_baseclone, create a worktree for
-    each branch, run git-filter-repo inside the worktree (destructive only to worktree),
-    and then fetch the rewritten branch into the monorepo as an identical branch.
-    """
-    ensure_dir(SANDBOX_DIR)
-    base_clone = os.path.join(SANDBOX_DIR, f"{subdir}_baseclone")
-    worktrees_root = os.path.join(SANDBOX_DIR, f"{subdir}_worktrees")
-    ensure_dir(worktrees_root)
-
-    clone_repo_once(repo_url, base_clone)
-
-    # gather branches from remote (origin)
-    branches = get_all_branches_in_origin(repo_url)
-    print(f"{subdir} branches: {branches}")
-
-    for branch in branches:
-        print(f"=== Importing {subdir}:{branch} ===")
-        worktree_dir = os.path.join(worktrees_root, branch)
-        # ensure any previous worktree removed
-        if os.path.exists(worktree_dir):
-            exec_cmd(f"rm -rf {worktree_dir}")
-
-        # create worktree pointing to origin/<branch>
-        exec_cmd(f"git worktree add {worktree_dir} origin/{branch}", cwd=base_clone)
-
-        # run filter-repo inside the worktree; this mutates the worktree repo only
-        # (must have GIT_FILTER_REPO available and executable)
-        if not os.path.exists(GIT_FILTER_REPO):
-            raise RuntimeError(f"git-filter-repo not found at {GIT_FILTER_REPO}")
-        exec_cmd(f"python3 {GIT_FILTER_REPO} --force --to-subdirectory-filter {subdir}", cwd=worktree_dir)
-
-        # fetch the rewritten branch into the monorepo as a branch with the same name
-        # (this sets monorepo branch to exactly the rewritten worktree branch)
-        exec_cmd(f"git fetch {worktree_dir} refs/heads/{branch}:refs/heads/{branch}", cwd=monorepo_root)
-
-        # cleanup worktree
-        exec_cmd(f"git worktree remove --force {worktree_dir}", cwd=base_clone)
-
-    # optional: remove the local base clone if you don't want to keep it
-    # exec_cmd(f"rm -rf {base_clone}")
-    # exec_cmd(f"rm -rf {worktrees_root}")
-
-# ---------- Monorepo creation / validation ----------
-def clone_and_validate_monorepo(monorepo_url: str, repo_path: str):
-    return # TODO: re-implement later
-    print(f"Cloning monorepo from {monorepo_url} into {repo_path} ...")
-    if os.path.exists(repo_path):
-        raise Exception(f"Directory {repo_path} already exists. Please remove it first.")
-    exec_cmd(f"git clone {monorepo_url} {repo_path}")
-    allowed_files = {'.git', 'README.md', 'README', '.gitignore', '.gitattributes'}
-    actual_files = set(os.listdir(repo_path))
-    unexpected_files = actual_files - allowed_files
-    if unexpected_files:
-        raise Exception(f"Monorepo is not empty. Found unexpected files: {', '.join(unexpected_files)}.")
-    print("Monorepo validated as empty.")
-
-def merge_repositories(config: Config):
-    return # TODO: re-implement later
-    repo_path = os.path.join(THIS_SCRIPT_DIR, config.destination.path) if config.destination else os.path.join(THIS_SCRIPT_DIR, "monorepo")
-    # prepare monorepo
-    if config.destination and getattr(config.destination, "url", None):
-        clone_and_validate_monorepo(config.destination.url, repo_path)
-    else:
-        create_empty_repo(repo_path)
-
-    # Import meta branches (fetch into monorepo as-is)
-    import_meta_repo_all_branches(repo_path, config.metarepo.url)
-
-    # Now import each subrepo; each branch will be fetched into monorepo as-is
-    for repo in config.repositories:
-        import_repo_all_branches(repo_path, repo.url, repo.path)
-
 
 def import_meta_repo(monorepo_root_dir: str, metarepo_root_dir: str):
     """
@@ -198,7 +100,7 @@ def import_submodule(monorepo_root_dir: str, submodule_repo_url: str, submodule_
         # First, make a minimal clone just to get branch information
         info_clone_dir = os.path.join(tempdir, "info_clone")
         print(f"Cloning repository to discover branches...")
-        exec_cmd(f"git clone {submodule_repo_url} {info_clone_dir}") # exec_cmd(f"git clone --bare {submodule_repo_url} {info_clone_dir}")
+        exec_cmd(f"git clone {submodule_repo_url} {info_clone_dir}")
         exec_cmd("git fetch --all --prune", cwd=info_clone_dir)
 
         # Get all branches from the bare clone
@@ -260,35 +162,30 @@ def import_submodule(monorepo_root_dir: str, submodule_repo_url: str, submodule_
             exec_cmd(f"git remote remove {remote_name}", cwd=monorepo_root_dir)
 
 
-"""
-def import_repo_branch(monorepo_root: str, repo_url: str, branch: str, subdirectory: str):
-    # clone the submodule as a temporary repo
-    subdirectory_dir = os.path.join(SANDBOX_DIR, subdirectory)
-    subdirectory_clone_parent = os.path.dirname(subdirectory_dir)
-    os.makedirs(subdirectory_clone_parent, exist_ok=True)
-    
-    # clone the repo to sandbox
-    os.chdir(subdirectory_clone_parent)
-    exec_cmd(f"git clone -b {branch} {repo_url} {subdirectory}")
-    
-    # rewrite its history to be in a subdirectory with its name
-    os.chdir(subdirectory_dir)
-    exec_cmd(f"python3 {GIT_FILTER_REPO} --to-subdirectory-filter {subdirectory}")
-    
-    # merge the rewritten repo history into the monorepo
-    os.chdir(monorepo_root)
-    exec_cmd(f"git remote add {subdirectory} {subdirectory_dir}")
-    exec_cmd(f"git fetch {subdirectory}")
-    exec_cmd(f"git merge {subdirectory}/{branch} --allow-unrelated-histories -m 'Merge {subdirectory}/{branch} into monorepo'")
-    
-    # cleanup
-    exec_cmd(f"git remote remove {subdirectory}")
-    exec_cmd(f"rm -rf {subdirectory_dir}")
-"""
 
+def main_flow(metarepo_url: str, monorepo_url: Optional[str] = None):
+    # clone metarepo
+    metarepo_root_dir = os.path.join(SANDBOX_DIR, "metarepo")
+    exec_cmd(f"git clone {metarepo_url} metarepo", cwd=SANDBOX_DIR)
 
-def import_submodule_with_clone(monorepo_root_dir: str, submodule_repo_url: str, submodule_path: str):
-    pass
+    # Prepare monorepo
+    monorepo_root_dir = os.path.join(SANDBOX_DIR, "monorepo")
+    if monorepo_url:
+        exec_cmd(f"git clone {monorepo_url} monorepo", cwd=SANDBOX_DIR)
+    else:
+        ensure_dir(monorepo_root_dir)
+        exec_cmd("git init --initial-branch=main", cwd=monorepo_root_dir)
+
+    # Import metarepo
+    import_meta_repo(monorepo_root_dir, metarepo_root_dir)
+
+    # Import all submodules
+    submodules = get_all_submodules(metarepo_root_dir)
+    for submodule in submodules:
+        submodule_path_in_metarepo = os.path.join(metarepo_root_dir, submodule.path)
+        expected_branches = set(get_all_branches(submodule_path_in_metarepo))
+        import_submodule(monorepo_root_dir, submodule.url, submodule.path, expected_branches)
+        
 
 # ---------- CLI ----------
 def main():

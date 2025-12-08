@@ -93,6 +93,21 @@ class TestGitOps(unittest.TestCase):
     submodule_a_content: RepoContent
     submodule_relative_path: str = "submodule_a"
 
+    def verify_submodule_import(self, monorepo_path: str, submodule_path: str, 
+                                expected_branches: set, submodule_content: RepoContent):
+        """Verify that submodule branches and files were correctly imported into monorepo."""
+        # verify all branches were imported
+        monorepo_branches = set(merger.get_all_branches(monorepo_path))
+        self.assertTrue(expected_branches.issubset(monorepo_branches))
+        
+        # verify files in each branch
+        for branch in submodule_content.branches:
+            # we switch branches in the main repo, submodule files should now exist in it
+            git_test_ops.switch_branch(monorepo_path, branch.name)
+            submodule_files = set([file.filename for file in branch.files])
+            imported_files = set(os.listdir(os.path.join(monorepo_path, submodule_path)))
+            self.assertTrue(submodule_files.issubset(imported_files))
+
     def check_file_content(self, repo_path: str, filename: str, expected_content: str) -> bool:
         file_path = os.path.join(repo_path, filename)
         if not os.path.isfile(file_path):
@@ -174,15 +189,10 @@ class TestGitOps(unittest.TestCase):
             expected_submodule_branches = set(merger.get_all_branches(submodule_path_in_metarepo, verbose=True))
             # import the submodule (clones it locally per branch, modifies it, and merges into the monorepo)
             merger.import_submodule(temp_repo_path, submodule_path_in_metarepo, submodule.path, expected_submodule_branches)
-            # verify all branches were imported
-            monorepo_branches = set(merger.get_all_branches(temp_repo_path))
-            self.assertTrue(expected_submodule_branches.issubset(monorepo_branches))
-            for branch in self.submodule_a_content.branches:
-                # we switch branches in the main repo, submodule files should now exist in it
-                git_test_ops.switch_branch(temp_repo_path, branch.name)
-                submodule_files = set([file.filename for file in branch.files])
-                imported_files = set(os.listdir(os.path.join(temp_repo_path, submodule.path)))
-                self.assertTrue(submodule_files.issubset(imported_files))
+            
+            # verify the import was successful
+            self.verify_submodule_import(temp_repo_path, submodule.path, 
+                                        expected_submodule_branches, self.submodule_a_content)
 
 if __name__ == "__main__":
     unittest.main()
