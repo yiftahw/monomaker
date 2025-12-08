@@ -126,6 +126,9 @@ def import_submodule(monorepo_root_dir: str, submodule_repo_url: str, submodule_
             # TODO: add test cases for these 3 possible scenarios
             # TODO: for case 1, it would be better to check against the default branch of the metarepo, rather than blindly creating new branches
 
+            # TODO: if some submodule doesn't contain a feature branch that DOES exist in the metarepo,
+            # and the metarepo tracks this submodule in the feature branch, we should import the submodule's default branch into the metarepo's feature branch
+
             if metarepo_tracked_branches is not None and branch not in metarepo_tracked_branches:
                 print(f"Skipping import of submodule {submodule_path} branch {branch} into monorepo, as metarepo branch does not track this submodule.")
                 continue
