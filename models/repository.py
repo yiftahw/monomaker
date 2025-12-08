@@ -32,3 +32,7 @@ class SubmoduleDef:
     """
     path: str
     url: str
+
+    def __hash__(self):
+        """allow to be used in sets/dicts"""
+        return hash((self.path, self.url))
