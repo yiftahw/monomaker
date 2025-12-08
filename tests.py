@@ -2,11 +2,21 @@ import unittest
 import tempfile
 import shutil
 import os
-from pprint import pprint
+from pprint import pprint, PrettyPrinter
+import io
+import json
+
+from utils import exec_cmd, listdir_list, pretty_print_list
 import git_test_ops
 from models.repository import FileContent, BranchContent, RepoContent
-
 import merger
+
+with open("debug.log", "w") as f:
+    f.write("Debug Log\n")
+
+def debug_log(message: str):
+    with open("debug.log", "a") as f:
+        f.write(message + "\n")
 
 def create_temporary_repo(content: RepoContent) -> str:
     """Creates a temporary repository and returns its path."""
@@ -76,7 +86,6 @@ def create_submodule_content() -> RepoContent:
         ]
     )
 
-
 class TestGitOps(unittest.TestCase):
     repo_content: RepoContent
     repo_path: str
@@ -84,12 +93,18 @@ class TestGitOps(unittest.TestCase):
     submodule_a_content: RepoContent
     submodule_relative_path: str = "submodule_a"
 
-    def assert_file_content(self, repo_path: str, filename: str, expected_content: str):
+    def check_file_content(self, repo_path: str, filename: str, expected_content: str) -> bool:
         file_path = os.path.join(repo_path, filename)
-        self.assertTrue(os.path.isfile(file_path))
+        if not os.path.isfile(file_path):
+            debug_log(f"File {file_path} does not exist.")
+            debug_log(f"Current directory listing: {pretty_print_list(listdir_list(repo_path))}")
+            return False
         with open(file_path, "r") as f:
             content = f.read()
-        self.assertEqual(content, expected_content)
+        if not content == expected_content:
+            debug_log(f"File {file_path} content mismatch.\nExpected:\n{expected_content}\nGot:\n{content}")
+            return False
+        return True
 
     def setUp(self):
         self.repo_content = create_repo_content()
@@ -111,7 +126,7 @@ class TestGitOps(unittest.TestCase):
         for branch in self.repo_content.branches:
             git_test_ops.switch_branch(self.repo_path, branch.name)
             for file in branch.files:
-                self.assert_file_content(self.repo_path, file.filename, file.content)
+                self.assertTrue(self.check_file_content(self.repo_path, file.filename, file.content))
 
     def test_submodule_integration(self):
         git_test_ops.switch_branch(self.repo_path, "main")
@@ -120,7 +135,7 @@ class TestGitOps(unittest.TestCase):
         for branch in self.submodule_a_content.branches:
             git_test_ops.switch_branch(submodule_path, branch.name)
             for file in branch.files:
-                self.assert_file_content(submodule_path, file.filename, file.content)
+                self.assertTrue(self.check_file_content(submodule_path, file.filename, file.content))
 
     def test_merger_get_all_branches(self):
         branches = set(merger.get_all_branches(self.repo_path))
@@ -142,7 +157,32 @@ class TestGitOps(unittest.TestCase):
         for branch in self.repo_content.branches:
             git_test_ops.switch_branch(temp_repo_path, branch.name)
             for file in branch.files:
-                self.assert_file_content(temp_repo_path, file.filename, file.content)
-        
+                self.assertTrue(self.check_file_content(temp_repo_path, file.filename, file.content))
+
+    def test_merger_import_submodule(self):
+        # create the monorepo target - all content will be imported into it
+        temp_repo_path = create_temporary_repo(RepoContent(branches=[]))
+        # import the main repo first
+        merger.import_meta_repo(temp_repo_path, self.repo_path)
+        # import all submodules
+        submodules = merger.get_all_submodules(self.repo_path)
+        for submodule in submodules:
+            submodule_path_in_metarepo = os.path.join(self.repo_path, submodule.path)
+            # need to have local copies of all branches to be able to clone (copy) them locally (without network)
+            # this is because we modify (in a destructive way) the .git content when running git-filter-repo
+            merger.update_all_repo_branches(submodule_path_in_metarepo)
+            expected_submodule_branches = set(merger.get_all_branches(submodule_path_in_metarepo, verbose=True))
+            # import the submodule (clones it locally per branch, modifies it, and merges into the monorepo)
+            merger.import_submodule(temp_repo_path, submodule_path_in_metarepo, submodule.path, expected_submodule_branches)
+            # verify all branches were imported
+            monorepo_branches = set(merger.get_all_branches(temp_repo_path))
+            self.assertTrue(expected_submodule_branches.issubset(monorepo_branches))
+            for branch in self.submodule_a_content.branches:
+                # we switch branches in the main repo, submodule files should now exist in it
+                git_test_ops.switch_branch(temp_repo_path, branch.name)
+                submodule_files = set([file.filename for file in branch.files])
+                imported_files = set(os.listdir(os.path.join(temp_repo_path, submodule.path)))
+                self.assertTrue(submodule_files.issubset(imported_files))
+
 if __name__ == "__main__":
     unittest.main()
