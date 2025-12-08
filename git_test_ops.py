@@ -2,7 +2,7 @@
 Simple API for Git operations.
 """
 import os
-from exec_cmd import exec_cmd, CmdResult
+from utils import exec_cmd, CmdResult
 
 def create_repo(path: str):
     os.makedirs(path, exist_ok=True)
