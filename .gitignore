@@ -2,3 +2,4 @@ config.json
 report.json
 sandbox/
 __pycache__/
+debug.log
