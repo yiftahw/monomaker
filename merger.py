@@ -174,7 +174,8 @@ def main_flow(metarepo_url: str, monorepo_url: Optional[str] = None):
         exec_cmd(f"git clone {monorepo_url} monorepo", cwd=SANDBOX_DIR)
     else:
         ensure_dir(monorepo_root_dir)
-        exec_cmd("git init --initial-branch=main", cwd=monorepo_root_dir)
+        print(f"Creating a new empty repository at {monorepo_root_dir} ...")
+        exec_cmd("git init --initial-branch=main", cwd=monorepo_root_dir, verbose_output=True)
 
     # Import metarepo
     import_meta_repo(monorepo_root_dir, metarepo_root_dir)
@@ -185,48 +186,29 @@ def main_flow(metarepo_url: str, monorepo_url: Optional[str] = None):
         submodule_path_in_metarepo = os.path.join(metarepo_root_dir, submodule.path)
         expected_branches = set(get_all_branches(submodule_path_in_metarepo))
         import_submodule(monorepo_root_dir, submodule.url, submodule.path, expected_branches)
-        
+
+    # Cleanup: remove metarepo clone
+    os.system(f"rm -rf {metarepo_root_dir}")
+
 
 # ---------- CLI ----------
 def main():
-    return #
-    parser = argparse.ArgumentParser()
-    subparsers = parser.add_subparsers(dest="command", required=True)
-
-    b = subparsers.add_parser("branch-report", aliases=["b"])
-    b.add_argument("-o", "--output", default=None)
-
-    m = subparsers.add_parser("merge", aliases=["m"])
-
-    s = subparsers.add_parser("submodule-report", aliases=["s"])
-    s.add_argument("-o", "--output", default=None)
-
+    parser = argparse.ArgumentParser(
+        description="Merge a metarepo and its submodules into a monorepo",
+        formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    parser.add_argument(
+        "metarepo_url",
+        help="URL of the metarepo to import (e.g., https://github.com/user/metarepo.git or /path/to/local/repo)"
+    )
+    parser.add_argument(
+        "--monorepo-url",
+        dest="monorepo_url",
+        default=None,
+        help="Optional URL of an existing monorepo to merge into. If not provided, a new empty monorepo will be created."
+    )
     args = parser.parse_args()
-
-    # load config.json from current dir
-    try:
-        with open("config.json", "r") as f:
-            config = Config.from_json(f.read())
-    except Exception as e:
-        print("Failed to load config.json:", e)
-        return
-
-    if args.command in ["branch-report", "b"]:
-        # same logic as before (not included here for brevity)
-        report = []
-        report.append({"url": config.metarepo.url, "branches": get_all_branches_in_origin(config.metarepo.url)})
-        for r in config.repositories:
-            report.append({"url": r.url, "branches": get_all_branches_in_origin(r.url)})
-        if args.output:
-            with open(args.output, "w") as fo:
-                fo.write(json.dumps(report, indent=2))
-            print("Wrote branch report to", args.output)
-        else:
-            pprint(report)
-    elif args.command in ["merge", "m"]:
-        merge_repositories(config)
-    elif args.command in ["submodule-report", "s"]:
-        pass
+    main_flow(args.metarepo_url, args.monorepo_url)
 
 if __name__ == "__main__":
     main()
