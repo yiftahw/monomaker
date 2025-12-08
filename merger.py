@@ -9,6 +9,7 @@ from models.repository import SubmoduleDef
 from pprint import pprint
 import json
 import configparser
+from exec_cmd import exec_cmd
 
 # Configurable paths
 GIT_FILTER_REPO = os.path.join(os.path.expanduser("~"), "git-filter-repo")
@@ -17,21 +18,6 @@ SANDBOX_DIR = os.path.join(THIS_SCRIPT_DIR, "sandbox")
 
 # Ensure sandbox is removed at exit (optional: remove this in debug)
 atexit.register(lambda: os.system(f"rm -rf {SANDBOX_DIR}"))
-
-# ---------- Utility ----------
-def exec_cmd(cmd: str, cwd: str | None = None, capture_output: bool = False) -> str | None:
-    """
-    Run shell command. Raises on non-zero exit.
-    If capture_output is True, returns stdout (str).
-    """
-    print(f"Executing: {cmd} (cwd={cwd or os.getcwd()})")
-    proc = subprocess.run(cmd, shell=True, cwd=cwd,
-                          stdout=subprocess.PIPE if capture_output else None,
-                          stderr=subprocess.PIPE, text=True)
-    if proc.returncode != 0:
-        err = proc.stderr.strip() if proc.stderr else "<no stderr>"
-        raise RuntimeError(f"Command failed ({proc.returncode}): {cmd}\n{err}")
-    return proc.stdout if capture_output else None
 
 def ensure_dir(path: str):
     os.makedirs(path, exist_ok=True)
@@ -59,9 +45,9 @@ def clone_repo_once(repo_url: str, local_dir: str):
 
 def get_all_branches(repo_path: str) -> List[str]:
     cmd = "git branch -a"
-    out = exec_cmd(cmd, cwd=repo_path, capture_output=True)
+    out = exec_cmd(cmd, cwd=repo_path)
     branches = set()
-    for line in out.splitlines():
+    for line in out.stdout.splitlines():
         line = line.strip()
         if line.startswith("*"):
             line = line[1:].strip()
@@ -75,7 +61,7 @@ def get_all_branches(repo_path: str) -> List[str]:
 
 def get_all_branches_in_origin(url: str) -> List[str]:
     cmd = f"git ls-remote --heads {url}"
-    out = exec_cmd(cmd, capture_output=True)
+    out = exec_cmd(cmd)
     branches = []
     for line in out.splitlines():
         parts = line.split()
@@ -176,6 +162,7 @@ def import_repo_all_branches(monorepo_root: str, repo_url: str, subdir: str):
 
 # ---------- Monorepo creation / validation ----------
 def clone_and_validate_monorepo(monorepo_url: str, repo_path: str):
+    return # TODO: re-implement later
     print(f"Cloning monorepo from {monorepo_url} into {repo_path} ...")
     if os.path.exists(repo_path):
         raise Exception(f"Directory {repo_path} already exists. Please remove it first.")
@@ -188,6 +175,7 @@ def clone_and_validate_monorepo(monorepo_url: str, repo_path: str):
     print("Monorepo validated as empty.")
 
 def merge_repositories(config: Config):
+    return # TODO: re-implement later
     repo_path = os.path.join(THIS_SCRIPT_DIR, config.destination.path) if config.destination else os.path.join(THIS_SCRIPT_DIR, "monorepo")
     # prepare monorepo
     if config.destination and getattr(config.destination, "url", None):
@@ -208,7 +196,16 @@ def import_meta_repo(monorepo_root_dir: str, metarepo_root_dir: str):
     It is expected that both folders are git repositories, and that the metarepo
     is already cloned locally.
     """
-    pass
+    metarepo_branches = get_all_branches(metarepo_root_dir)
+    print(f"Meta-repo branches: {metarepo_branches}")
+    exec_cmd(f"git remote add metarepo {metarepo_root_dir}", cwd=monorepo_root_dir)
+    exec_cmd(f"git fetch metarepo", cwd=monorepo_root_dir)
+    for branch in metarepo_branches:
+        print(f"=== Importing meta:{branch} ===")
+        # ensure monorepo exists and branch created/overwritten to exactly meta branch
+        exec_cmd(f"git checkout -B {branch} metarepo/{branch}", cwd=monorepo_root_dir)
+    # cleanup
+    exec_cmd(f"git remote remove metarepo", cwd=monorepo_root_dir)
 
 # ---------- CLI ----------
 def main():

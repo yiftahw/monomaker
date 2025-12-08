@@ -6,7 +6,7 @@ from pprint import pprint
 import git_test_ops
 from models.repository import FileContent, BranchContent, RepoContent
 
-from merger import get_all_branches, get_all_submodules
+import merger
 
 def create_temporary_repo(content: RepoContent) -> str:
     """Creates a temporary repository and returns its path."""
@@ -122,19 +122,27 @@ class TestGitOps(unittest.TestCase):
             for file in branch.files:
                 self.assert_file_content(submodule_path, file.filename, file.content)
 
-    def test_get_all_branches(self):
-        branches = set(get_all_branches(self.repo_path))
+    def test_merger_get_all_branches(self):
+        branches = set(merger.get_all_branches(self.repo_path))
         expected_branches = set([branch.name for branch in self.repo_content.branches])
         self.assertCountEqual(branches, expected_branches)
 
-        submodule_branches = set(get_all_branches(self.submodule_a_path))
+        submodule_branches = set(merger.get_all_branches(self.submodule_a_path))
         expected_submodule_branches = set([branch.name for branch in self.submodule_a_content.branches])
         self.assertCountEqual(submodule_branches, expected_submodule_branches)
 
-    def test_get_all_submodules(self):
-        submodules = get_all_submodules(self.repo_path)
+    def test_merger_get_all_submodules(self):
+        submodules = merger.get_all_submodules(self.repo_path)
         self.assertEqual(len(submodules), 1)
         self.assertEqual(submodules[0].path, self.submodule_relative_path)
+
+    def test_merger_import_meta_repo(self):
+        temp_repo_path = create_temporary_repo(RepoContent(branches=[]))
+        merger.import_meta_repo(temp_repo_path, self.repo_path)
+        for branch in self.repo_content.branches:
+            git_test_ops.switch_branch(temp_repo_path, branch.name)
+            for file in branch.files:
+                self.assert_file_content(temp_repo_path, file.filename, file.content)
         
 if __name__ == "__main__":
     unittest.main()
