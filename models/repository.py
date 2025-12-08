@@ -22,3 +22,13 @@ class BranchContent:
 @dataclass
 class RepoContent:
     branches: List[BranchContent]
+
+@dataclass_json
+@dataclass
+class SubmoduleDef:
+    """
+    `path`: relative to the repo root  
+    `url`: URL of the submodule
+    """
+    path: str
+    url: str
