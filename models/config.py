@@ -1,7 +1,6 @@
+from typing import Optional
 from dataclasses import dataclass
 from dataclasses_json import dataclass_json
-from typing import Optional
-
 
 @dataclass_json
 @dataclass
@@ -13,6 +12,6 @@ class RepoConfig:
 @dataclass_json
 @dataclass
 class Config:
-    monorepo_name: str
+    destination: Optional[RepoConfig]
+    metarepo: RepoConfig
     repositories: list[RepoConfig]
-    monorepo_url: Optional[str] = None
