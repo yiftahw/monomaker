@@ -208,7 +208,7 @@ def import_meta_repo(monorepo_root_dir: str, metarepo_root_dir: str):
     It is expected that both folders are git repositories, and that the metarepo
     is already cloned locally.
     """
-
+    pass
 
 # ---------- CLI ----------
 def main():
