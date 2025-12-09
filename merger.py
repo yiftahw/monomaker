@@ -14,9 +14,12 @@ import tempfile
 from dataclasses import dataclass
 
 # Configurable paths
-GIT_FILTER_REPO = os.path.join(os.path.expanduser("~"), "git-filter-repo")
 THIS_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+GIT_FILTER_REPO = os.path.join(THIS_SCRIPT_DIR, "git-filter-repo")
 SANDBOX_DIR = os.path.join(THIS_SCRIPT_DIR, "sandbox")
+
+if not os.path.exists(GIT_FILTER_REPO):
+    raise RuntimeError(f"git-filter-repo not found at {GIT_FILTER_REPO}")
 
 # Ensure sandbox is removed at exit (optional: remove this in debug)
 atexit.register(lambda: os.system(f"rm -rf {SANDBOX_DIR}"))
@@ -118,9 +121,6 @@ def import_submodule(monorepo_root_dir: str,
 
     metarepo_tracked_branches: all branches in the metarepo that track this submodule.
     """
-    if not os.path.exists(GIT_FILTER_REPO):
-        raise RuntimeError(f"git-filter-repo not found at {GIT_FILTER_REPO}")
-    
     with tempfile.TemporaryDirectory() as tempdir:
         # First, make a minimal clone just to get branch information
         info_clone_dir = os.path.join(tempdir, "info_clone")
