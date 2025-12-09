@@ -177,8 +177,12 @@ class TestGitOps(unittest.TestCase):
                 self.assertTrue(self.check_file_content(temp_repo_path, file.filename, file.content))
 
     def test_merger_import_submodule(self):
+        metarepo_tracked_submodules_mapping = merger.get_metarepo_tracked_submodules_mapping(self.repo_path)
         # create the monorepo target - all content will be imported into it
         temp_repo_path = create_temporary_repo(RepoContent(branches=[]))
+        # get the metarepo's default branch
+        default_branch = merger.get_head_branch(self.repo_path)
+        self.assertTrue(default_branch is not None and len(default_branch) > 0)
         # import the main repo first
         merger.import_meta_repo(temp_repo_path, self.repo_path)
         # import all submodules
@@ -190,7 +194,15 @@ class TestGitOps(unittest.TestCase):
             merger.update_all_repo_branches(submodule_path_in_metarepo)
             expected_submodule_branches = set(merger.get_all_branches(submodule_path_in_metarepo, verbose=True))
             # import the submodule (clones it locally per branch, modifies it, and merges into the monorepo)
-            merger.import_submodule(temp_repo_path, submodule_path_in_metarepo, submodule.path, expected_submodule_branches)
+            params = merger.ImportSubmoduleParams(
+                temp_repo_path, 
+                submodule.url, 
+                submodule.path, 
+                default_branch, 
+                set(merger.get_all_branches(self.repo_path)), 
+                expected_submodule_branches, 
+                metarepo_tracked_submodules_mapping[submodule])
+            merger.import_submodule(params)
             
             # verify the import was successful
             self.verify_submodule_import(temp_repo_path, submodule.path, 
