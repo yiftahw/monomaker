@@ -8,7 +8,7 @@ from pprint import pprint, PrettyPrinter
 import io
 import json
 
-from utils import exec_cmd, listdir_list, pretty_print_list
+from utils import exec_cmd, listdir_list, pretty_print_list, header_string
 import git_test_ops
 from models.repository import FileContent, BranchContent, RepoContent
 import merger
@@ -100,7 +100,7 @@ class TestGitOps(unittest.TestCase):
         """Verify that submodule branches and files were correctly imported into monorepo."""
         # verify all branches were imported
         monorepo_branches = set(merger.get_all_branches(monorepo_path))
-        self.assertTrue(expected_branches.issubset(monorepo_branches))
+        self.assertTrue(expected_branches.issubset(monorepo_branches), f"Expected branches {expected_branches} not all found in monorepo branches {monorepo_branches}")
         
         # verify files in each branch
         for branch in submodule_content.branches:
@@ -129,11 +129,14 @@ class TestGitOps(unittest.TestCase):
         self.submodule_a_content = create_submodule_content()
         self.submodule_a_path = create_temporary_repo(self.submodule_a_content)
         self.monorepo_path = create_temporary_repo(RepoContent(branches=[]))
+        git_test_ops.switch_branch(self.repo_path, "main")
+        git_test_ops.switch_branch(self.submodule_a_path, "main")
         git_test_ops.add_local_submodule(
             self.repo_path,
             self.submodule_a_path,
             self.submodule_relative_path
         )
+        print(header_string("Setup complete"))
 
     def tearDown(self):
         shutil.rmtree(self.monorepo_path)
@@ -178,21 +181,25 @@ class TestGitOps(unittest.TestCase):
                 self.assertTrue(self.check_file_content(self.monorepo_path, file.filename, file.content))
 
     def test_merger_import_submodule(self):
-        metarepo_tracked_submodules_mapping = merger.get_metarepo_tracked_submodules_mapping(self.repo_path)
-        # create the monorepo target - all content will be imported into it
-        # get the metarepo's default branch
+        # first thing we do after clone is to get the HEAD, it will be consider the default
         default_branch = merger.get_head_branch(self.repo_path)
-        self.assertTrue(default_branch is not None and len(default_branch) > 0)
+        self.assertTrue(default_branch == "main")
+        metarepo_tracked_submodules_mapping = merger.get_metarepo_tracked_submodules_mapping(self.repo_path)
         # import the main repo first
         merger.import_meta_repo(self.monorepo_path, self.repo_path)
         # import all submodules
-        submodules = merger.get_all_submodules(self.repo_path)
+        submodules = metarepo_tracked_submodules_mapping.keys()
+        submodule_names = [submodule.path for submodule in submodules]
+        self.assertEqual(submodule_names, ["submodule_a"])
+        print(header_string(f"Found submodules to import: {submodule_names}"))
         for submodule in submodules:
+            print(header_string(f"Importing submodule {submodule.path}"))
             submodule_path_in_metarepo = os.path.join(self.repo_path, submodule.path)
             # need to have local copies of all branches to be able to clone (copy) them locally (without network)
             # this is because we modify (in a destructive way) the .git content when running git-filter-repo
             merger.update_all_repo_branches(submodule_path_in_metarepo)
-            expected_submodule_branches = set(merger.get_all_branches(submodule_path_in_metarepo, verbose=True))
+            expected_submodule_branches = set(merger.get_all_branches(submodule_path_in_metarepo))
+            print(header_string(f"Expected submodule {submodule.path} branches: {expected_submodule_branches}"))
             # import the submodule (clones it locally per branch, modifies it, and merges into the monorepo)
             merger.import_submodule(self.monorepo_path, 
                 submodule.url, 

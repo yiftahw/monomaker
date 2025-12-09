@@ -168,6 +168,13 @@ def import_submodule(monorepo_root_dir: str,
             submodule_not_tracked_in_metarepo_branch = metarepo_tracked_branches is not None and branch not in metarepo_tracked_branches
             if (branch_exists_in_metarepo and submodule_not_tracked_in_metarepo_branch) or (not branch_exists_in_metarepo and not metarepo_default_branch_tracks_submodule):
                 print(f"Skipping import of submodule {submodule_path} branch {branch} into monorepo, as metarepo branch does not track this submodule.")
+                print(f"Details:")
+                print(f"branch_exists_in_metarepo:                {branch_exists_in_metarepo}")
+                print(f"submodule_not_tracked_in_metarepo_branch: {submodule_not_tracked_in_metarepo_branch}")
+                print(f"metarepo_default_branch_tracks_submodule: {metarepo_default_branch_tracks_submodule}")
+                print(f"")
+                print(f"metarepo_tracked_branches: {metarepo_tracked_branches}")
+                print(f"metarepo default_branch: {metarepo_default_branch}")
                 continue
 
             # if some submodule doesn't contain a feature branch that DOES exist in the metarepo,
