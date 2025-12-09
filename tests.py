@@ -194,15 +194,13 @@ class TestGitOps(unittest.TestCase):
             merger.update_all_repo_branches(submodule_path_in_metarepo)
             expected_submodule_branches = set(merger.get_all_branches(submodule_path_in_metarepo, verbose=True))
             # import the submodule (clones it locally per branch, modifies it, and merges into the monorepo)
-            params = merger.ImportSubmoduleParams(
-                self.monorepo_path, 
+            merger.import_submodule(self.monorepo_path, 
                 submodule.url, 
                 submodule.path, 
                 default_branch, 
                 set(merger.get_all_branches(self.repo_path)), 
                 expected_submodule_branches, 
                 metarepo_tracked_submodules_mapping[submodule])
-            merger.import_submodule(params)
             
             # verify the import was successful
             self.verify_submodule_import(self.monorepo_path, submodule.path, 
