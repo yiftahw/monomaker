@@ -47,3 +47,9 @@ def pretty_print_list(nested_list, indent=4):
     """
     nested_as_json = json.dumps(nested_list, indent=indent)
     return nested_as_json
+
+def header_string(msg: str) -> str:
+    msg = "=== " + msg + " ==="
+    msg_len = len(msg)
+    border = "=" * msg_len
+    return f"{border}\n{msg}\n{border}"
