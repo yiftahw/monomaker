@@ -147,7 +147,8 @@ def import_submodule(monorepo_root_dir: str, submodule_repo_url: str, submodule_
             # 2. branch exists in metarepo and tracks submodule        -> import submodule branch into it
             # 3. branch exists in metarepo but doesn't track submodule -> skip importing submodule branch into it
             # TODO: add test cases for these 3 possible scenarios
-            # TODO: for case 1, it would be better to check against the default branch of the metarepo, rather than blindly creating new branches
+            # TODO: for case 1, we need to branch out from the default branch of the metarepo, rather than blindly creating new branches,
+            # if it doesn't track the submodule, we should skip importing it
 
             if metarepo_tracked_branches is not None and branch not in metarepo_tracked_branches:
                 print(f"Skipping import of submodule {submodule_path} branch {branch} into monorepo, as metarepo branch does not track this submodule.")
@@ -179,6 +180,7 @@ def import_submodule(monorepo_root_dir: str, submodule_repo_url: str, submodule_
             
             # Ensure the corresponding branch exists in monorepo (or create it)
             # Using shell OR logic: try to create, if fails then switch to existing
+            # TODO: if it doesn't exist, we need to create it from the default branch, not from the current HEAD!! and check if it tracks the submodule first
             exec_cmd(f"git switch -c {monorepo_branch} 2>/dev/null || git switch {monorepo_branch}", cwd=monorepo_root_dir)
             
             # need to remove all the files in the monorepo that are under submodule_path
