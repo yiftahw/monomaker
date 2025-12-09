@@ -3,3 +3,4 @@ report.json
 sandbox/
 __pycache__/
 debug.log
+git-filter-repo
