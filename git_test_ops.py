@@ -38,17 +38,22 @@ def add_submodule(repo: str, submodule_url: str, path_relative_to_repo: str):
     exec_cmd(f"git submodule add {submodule_url} {path_relative_to_repo}", cwd=repo)
     exec_cmd("git commit -m 'Add submodule'", cwd=repo)
 
-def add_local_submodule(repo_path: str, submodule_path: str, path_relative_to_repo: str):
+def add_local_submodule(repo_path: str, repo_branch: str, submodule_path: str, path_relative_to_repo: str, branch: str = "main"):
     """
-    Docstring for add_local_submodule
-    
     :param repo: root to repository that will track the submodule
     :type repo: str
+    :param repo_branch: Branch of the main repository to which the submodule will be added (it is expected that the branch already exists and has commits)
+    :type repo_branch: str
     :param submodule_path: Path to the local submodule repository
     :type submodule_path: str
     :param path_relative_to_repo: Path where the submodule will be added
     :type path_relative_to_repo: str
+    :param branch: Branch of the submodule to checkout (it is expected that the branch already exists and has commits)
+    :type branch: str
     """
+    switch_branch(repo_path, repo_branch)
     cmd = f"git -c protocol.file.allow=always submodule add file://{submodule_path} {path_relative_to_repo}"
     exec_cmd(cmd, cwd=repo_path)
-    exec_cmd("git commit -m 'Add local submodule'", cwd=repo_path)
+    submodule_path = os.path.join(repo_path, path_relative_to_repo)
+    switch_branch(submodule_path, branch)
+    exec_cmd(f"git commit -m 'Add local submodule {path_relative_to_repo} branch: {branch}'", cwd=repo_path)
