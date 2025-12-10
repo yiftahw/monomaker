@@ -7,10 +7,10 @@ from utils import exec_cmd, CmdResult
 def create_repo(path: str, default_branch: str = "main"):
     os.makedirs(path, exist_ok=True)
     exec_cmd(f"git init --initial-branch={default_branch}", cwd=path)
-    exec_cmd('git commit --allow-empty -m "Initial commit"', cwd=path)
     exec_cmd('git config user.email "a@b.c"', cwd=path)
     exec_cmd('git config user.name "tester"', cwd=path)
     exec_cmd('git config protocol.file.allow always', cwd=path)
+    exec_cmd('git commit --allow-empty -m "Initial commit"', cwd=path)
 
 def commit_file(repo: str, filename: str, content: str, msg: str):
     with open(os.path.join(repo, filename), "w") as f:
