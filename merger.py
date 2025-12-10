@@ -107,6 +107,57 @@ def update_all_repo_branches(repo_root_dir: str):
         exec_cmd(f"git pull origin {branch}", cwd=repo_root_dir)
     return branches
 
+@dataclass
+class SubmoduleImportInfoEntry:
+    """Represents which submodule branch applied to which metarepo branch."""
+    metarepo_branch: str
+    submodule_branch: str
+
+class SubmoduleImportInfo:
+    submodule_relative_path: str
+    entries: List[SubmoduleImportInfoEntry]
+    def __init__(self, submodule_relative_path: str):
+        self.submodule_relative_path = submodule_relative_path
+        self.entries = []
+    def add_entry(self, metarepo_branch: str, submodule_branch: str):
+        self.entries.append(SubmoduleImportInfoEntry(metarepo_branch, submodule_branch))
+    def __str__(self):
+        s = f"Submodule Import Info for {self.submodule_relative_path}:\n"
+        for entry in self.entries:
+            s += f"  metarepo branch: {entry.metarepo_branch} -> submodule branch: {entry.submodule_branch}\n"
+        return s
+    def __eq__(self, other):
+        if not isinstance(other, SubmoduleImportInfo):
+            print("Other is not SubmoduleImportInfo")
+            return False
+        if self.submodule_relative_path != other.submodule_relative_path:
+            print(f"Submodule paths differ: {self.submodule_relative_path} != {other.submodule_relative_path}")
+            return False
+        if len(self.entries) != len(other.entries):
+            print(f"Number of entries differ: {len(self.entries)} != {len(other.entries)}")
+            return False
+        # sort each list prior to comparison
+        def key_func(e: SubmoduleImportInfoEntry):
+            return (e.metarepo_branch, e.submodule_branch)
+        self.entries.sort(key=key_func)
+        other.entries.sort(key=key_func)
+        for e1, e2 in zip(self.entries, other.entries):
+            if e1.metarepo_branch != e2.metarepo_branch or e1.submodule_branch != e2.submodule_branch:
+                print(f"Entries differ: {e1} != {e2}")
+                return False
+        return True
+
+class MigrationReport:
+    submodules_info: Mapping[str, SubmoduleImportInfo]
+    def __init__(self):
+        self.submodules_info = dict()
+    def add_submodule_entry(self, submodule_relative_path: str, info: SubmoduleImportInfo):
+        self.submodules_info[submodule_relative_path] = info
+    def __str__(self):
+        s = "Migration Report:\n"
+        for _, info in self.submodules_info.items():
+            s += str(info) + "\n"
+        return s
 
 def import_submodule(monorepo_root_dir: str,
                      submodule_repo_url: str,
@@ -114,13 +165,14 @@ def import_submodule(monorepo_root_dir: str,
                      metarepo_default_branch: str,
                      metarepo_branches: Set[str],
                      expected_branches: Optional[Set[str]] = None,
-                     metarepo_tracked_branches: Optional[Set[str]] = None):
+                     metarepo_tracked_branches: Optional[Set[str]] = None) -> SubmoduleImportInfo:
     """
     It is expected that monorepo_root_dir points to a git repository where the submodule will be imported.
     the submodule will be cloned from submodule_repo_url, and all its branches will be imported under submodule_path in the monorepo.
 
     metarepo_tracked_branches: all branches in the metarepo that track this submodule.
     """
+    report = SubmoduleImportInfo(submodule_path)
     with tempfile.TemporaryDirectory() as tempdir:
         # First, make a minimal clone just to get branch information
         info_clone_dir = os.path.join(tempdir, "info_clone")
@@ -156,7 +208,6 @@ def import_submodule(monorepo_root_dir: str,
             # 2. branch exists in metarepo, exists in submodule        -> import submodule branch into it (if submodule is tracked in the metarepo branch)
             # 3. branch exists in metarepo, doesn't exist in submodule -> import the submodule's default branch (if needed, see above)
             # 4. branch doesn't exist in metarepo, exists in submodule -> branch out from metarepo's default branch, import the submodule (if needed, see above)
-            # TODO: add test cases for all possible scenarios
             
             # NOTE: in case 4, it is assumed that the metarepo itself was already imported into the monorepo,
             # so the default branch should exist fully in the monorepo, and it is safe to branch out from it.
@@ -187,16 +238,20 @@ def import_submodule(monorepo_root_dir: str,
                 branch_to_import = submodule_default_branch
 
             # if branch doesn't exist in the metarepo, we need to create it in the monorepo from the default branch
+            metarepo_branch_used = branch
             if not branch_exists_in_metarepo:
                 # first switch to the default branch
                 exec_cmd(f"git switch {metarepo_default_branch}", cwd=monorepo_root_dir)
                 # then create the new branch from it
                 exec_cmd(f"git switch -c {branch}", cwd=monorepo_root_dir)
                 print(f"Created new monorepo branch {branch} from metarepo default branch {metarepo_default_branch} to import submodule into it.")
+                metarepo_branch_used = metarepo_default_branch
             else:
                 # branch exists in metarepo, so we should switch to it
                 exec_cmd(f"git switch {branch}", cwd=monorepo_root_dir)
             print(header_string(f"Importing {submodule_path}:{branch_to_import} to monorepo:{branch}"))
+
+            report.add_entry(metarepo_branch_used, branch_to_import)
 
             # Create a fresh clone of the submodule with just this branch
             branch_clone_dir_name = f"clone_{branch_to_import.replace('/', '_')}"
@@ -226,6 +281,7 @@ def import_submodule(monorepo_root_dir: str,
             
             # Cleanup remote (the clone directory will be cleaned up by tempdir)
             exec_cmd(f"git remote remove {remote_name}", cwd=monorepo_root_dir)
+    return report
 
 def get_metarepo_tracked_submodules_mapping(repo_path: str) -> Mapping[SubmoduleDef, Set[str]]:
     """
@@ -243,7 +299,9 @@ def get_metarepo_tracked_submodules_mapping(repo_path: str) -> Mapping[Submodule
             tracked_submodules[submodule].add(branch)
     return tracked_submodules
 
-def main_flow(metarepo_url: str, monorepo_url: Optional[str] = None):
+def main_flow(metarepo_url: str, monorepo_url: Optional[str] = None) -> MigrationReport:
+    report = MigrationReport()
+
     ensure_dir(SANDBOX_DIR)
     # clone metarepo
     metarepo_root_dir = os.path.join(SANDBOX_DIR, "metarepo")
@@ -281,9 +339,11 @@ def main_flow(metarepo_url: str, monorepo_url: Optional[str] = None):
     
     # for each submodule, we will do a fresh clone, and then process it
     for submodule in metarepo_tracked_submodules_mapping:
-        import_submodule(monorepo_root_dir, submodule.url, submodule.path, metarepo_default_branch, metarepo_branches, expected_branches=None, metarepo_tracked_branches=metarepo_tracked_submodules_mapping[submodule])
+        submodule_report = import_submodule(monorepo_root_dir, submodule.url, submodule.path, metarepo_default_branch, metarepo_branches, expected_branches=None, metarepo_tracked_branches=metarepo_tracked_submodules_mapping[submodule])
+        report.add_submodule_entry(submodule.path, submodule_report)
 
     print(header_string("Merge Complete"))
+    return report
 
 # ---------- CLI ----------
 def main():
