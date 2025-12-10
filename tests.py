@@ -20,19 +20,35 @@ def debug_log(message: str):
     with open("debug.log", "a") as f:
         f.write(message + "\n")
 
+def create_and_fill_branch(repo_path: str, branch_content: BranchContent, branch_name: str, default_branch: str):
+    """Create a branch and fill it with files as per RepoContent."""
+    # switch to the default branch first, to branch off it
+    git_test_ops.switch_branch(repo_path, default_branch)
+    git_test_ops.create_or_switch_to_branch(repo_path, branch_name)
+    # get the branch content
+    for file in branch_content.files:
+        git_test_ops.commit_file(repo_path, file.filename, file.content, file.commit_msg)
+
 def create_temporary_repo(content: RepoContent) -> str:
     """Creates a temporary repository and returns its path."""
     tempdir = tempfile.mkdtemp()
-    git_test_ops.create_repo(tempdir)
+    git_test_ops.create_repo(tempdir, content.default_branch)
+    # start with creating the default branch first
+    default_branch_content = next((b for b in content.branches if b.name == content.default_branch), None)
+    if default_branch_content is not None:
+        create_and_fill_branch(tempdir, default_branch_content, content.default_branch, content.default_branch)
+    # create other branches
     for branch in content.branches:
-        git_test_ops.create_branch(tempdir, branch.name)
-        for file in branch.files:
-            git_test_ops.commit_file(tempdir, file.filename, file.content, file.commit_msg)
+        if branch.name == content.default_branch:
+            continue  # already created
+        create_and_fill_branch(tempdir, branch, branch.name, content.default_branch)
+    git_test_ops.switch_branch(tempdir, content.default_branch)
     return tempdir
 
 
 def create_repo_content() -> RepoContent:
     return RepoContent(
+        default_branch="main",
         branches=[
             BranchContent(
                 name="main",
@@ -64,6 +80,7 @@ def create_repo_content() -> RepoContent:
 
 def create_submodule_content() -> RepoContent:
     return RepoContent(
+        default_branch="main",
         branches=[
             BranchContent(
                 name="main",
@@ -128,9 +145,7 @@ class TestGitOps(unittest.TestCase):
         self.repo_path = create_temporary_repo(self.repo_content)
         self.submodule_a_content = create_submodule_content()
         self.submodule_a_path = create_temporary_repo(self.submodule_a_content)
-        self.monorepo_path = create_temporary_repo(RepoContent(branches=[]))
-        git_test_ops.switch_branch(self.repo_path, "main")
-        git_test_ops.switch_branch(self.submodule_a_path, "main")
+        self.monorepo_path = create_temporary_repo(RepoContent(default_branch="main", branches=[]))
         git_test_ops.add_local_submodule(
             self.repo_path,
             self.submodule_a_path,

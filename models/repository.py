@@ -21,6 +21,7 @@ class BranchContent:
 @dataclass_json
 @dataclass
 class RepoContent:
+    default_branch: str
     branches: List[BranchContent]
 
 @dataclass_json
