@@ -9,7 +9,6 @@ def create_repo(path: str, default_branch: str = "main"):
     exec_cmd(f"git init --initial-branch={default_branch}", cwd=path)
     exec_cmd('git config user.email "a@b.c"', cwd=path)
     exec_cmd('git config user.name "tester"', cwd=path)
-    exec_cmd('git config protocol.file.allow always', cwd=path)
     exec_cmd('git commit --allow-empty -m "Initial commit"', cwd=path)
 
 def commit_file(repo: str, filename: str, content: str, msg: str):
@@ -23,6 +22,15 @@ def create_or_switch_to_branch(repo: str, branch: str):
 
 def switch_branch(repo: str, branch: str):
     exec_cmd(f"git switch {branch}", cwd=repo)
+
+def get_commit_hash(repo: str, branch: str) -> str:
+    result: CmdResult = exec_cmd(f"git rev-parse {branch}", cwd=repo)
+    return result.stdout.strip()
+
+def get_submodule_commit_hash(repo: str, submodule_path: str) -> str:
+    result: CmdResult = exec_cmd(f"git submodule status {submodule_path}", cwd=repo)
+    commit_hash = result.stdout.strip().split()[0]
+    return commit_hash
 
 def add_submodule(repo: str, submodule_url: str, path_relative_to_repo: str):
     """
@@ -52,7 +60,7 @@ def add_local_submodule(repo_path: str, repo_branch: str, submodule_path: str, p
     :type branch: str
     """
     switch_branch(repo_path, repo_branch)
-    cmd = f"git -c protocol.file.allow=always submodule add file://{submodule_path} {path_relative_to_repo}"
+    cmd = f"git submodule add file://{submodule_path} {path_relative_to_repo}"
     exec_cmd(cmd, cwd=repo_path)
     submodule_path = os.path.join(repo_path, path_relative_to_repo)
     switch_branch(submodule_path, branch)

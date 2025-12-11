@@ -121,6 +121,9 @@ class TestGitOps(unittest.TestCase):
     submodule_a_path: str
     submodule_a_content: RepoContent
     submodule_relative_path: str = "submodule_a"
+    nested_submodule_path: str
+    nested_submodule_content: RepoContent
+    nested_submodule_relative_path: str = "nested_submodule"
 
     def verify_submodule_import(self, monorepo_path: str, submodule_path: str, 
                                 expected_branches: set, submodule_content: RepoContent):
@@ -149,12 +152,26 @@ class TestGitOps(unittest.TestCase):
             debug_log(f"File {file_path} content mismatch.\nExpected:\n{expected_content}\nGot:\n{content}")
             return False
         return True
+    
+    def allow_git_file_protocol(self):
+        self.old_file_allow_value = exec_cmd('git config --global --get protocol.file.allow || echo ""', verbose=False).stdout.strip()
+        self.old_file_allow_value = None if self.old_file_allow_value == "" else self.old_file_allow_value
+        exec_cmd('git config --global protocol.file.allow always')
+
+    def cleanup_git_file_protocol(self):
+        if self.old_file_allow_value is None:
+            exec_cmd('git config --global --unset protocol.file.allow', verbose=False)
+        else:
+            exec_cmd(f'git config --global protocol.file.allow {self.old_file_allow_value}', verbose=False)
 
     def setUp(self):
+        self.allow_git_file_protocol()
         self.repo_content = create_repo_content()
         self.repo_path = create_temporary_repo(self.repo_content)
         self.submodule_a_content = create_submodule_content()
         self.submodule_a_path = create_temporary_repo(self.submodule_a_content)
+        self.nested_submodule_content = create_submodule_content()
+        self.nested_submodule_path = create_temporary_repo(self.nested_submodule_content)
         self.monorepo_path = create_temporary_repo(RepoContent(default_branch="main", branches=[]))
         git_test_ops.add_local_submodule(
             self.repo_path,
@@ -170,14 +187,25 @@ class TestGitOps(unittest.TestCase):
             self.submodule_relative_path,
             self.submodule_a_content.default_branch
         )
+        git_test_ops.add_local_submodule(
+            self.submodule_a_path,
+            self.submodule_a_content.default_branch,
+            self.nested_submodule_path,
+            self.nested_submodule_relative_path,
+            self.nested_submodule_content.default_branch
+        )
         # make sure we switch back to default branch (HEAD is just whatever we point to now)
         git_test_ops.switch_branch(self.repo_path, self.repo_content.default_branch)
+        git_test_ops.switch_branch(self.submodule_a_path, self.submodule_a_content.default_branch)
+        git_test_ops.switch_branch(self.nested_submodule_path, self.nested_submodule_content.default_branch)
         print(header_string("Setup complete"))
 
     def tearDown(self):
         shutil.rmtree(self.monorepo_path)
         shutil.rmtree(self.repo_path)
         shutil.rmtree(self.submodule_a_path)
+        shutil.rmtree(self.nested_submodule_path)
+        self.cleanup_git_file_protocol()
 
     def test_repo_creation(self):
         # Verify main branch files
@@ -269,13 +297,27 @@ class TestGitOps(unittest.TestCase):
         # to summarize comment from top, we expect the following combinations:
         # NOTE: case 1: `feature` branch not imported from submodule!
         expected_submodules_report = merger.SubmoduleImportInfo(self.submodule_relative_path)
-        expected_submodules_report.add_entry("main", "main")  # case 2
-        expected_submodules_report.add_entry("foo", "main")   # case 3
-        expected_submodules_report.add_entry("main", "dev")   # case 4
+        expected_submodules_report.add_entry("main", "main", "main")  # case 2: created "main" in monorepo from metarepo "main" and submodule "main"
+        expected_submodules_report.add_entry("foo", "foo", "main")    # case 3: created "foo" in monorepo from metarepo "foo" and submodule default "main"
+        expected_submodules_report.add_entry("dev", "main", "dev")    # case 4: created "dev" in monorepo from metarepo default "main" and submodule "dev"
 
         self.assertTrue(len(report.submodules_info) == 1)
         actual_submodule_report = report.submodules_info[self.submodule_relative_path]
         self.assertTrue(actual_submodule_report == expected_submodules_report) # the report overloads `__eq__`
+
+        # verify nested submodule is tracked correctly in the monorepo
+        # <root>/submodule_a/nested_submodule default branch should be a direct submodule of the monorepo default branch
+        git_test_ops.switch_branch(self.monorepo_path, default_branch)
+        submodules_in_monorepo = merger.get_all_submodules(self.monorepo_path)
+        self.assertEqual(1, len(submodules_in_monorepo))
+        nested_submodule_in_monorepo = submodules_in_monorepo[0]
+        expected_path = os.path.join(self.submodule_relative_path, self.nested_submodule_relative_path)
+        self.assertEqual(nested_submodule_in_monorepo.path, expected_path)
+        original_commit_hash = git_test_ops.get_commit_hash(self.nested_submodule_path, self.nested_submodule_content.default_branch)
+        current_commit_hash = git_test_ops.get_submodule_commit_hash(self.monorepo_path, expected_path)
+        imported_commit_hash = nested_submodule_in_monorepo.commit_hash
+        self.assertEqual(original_commit_hash, current_commit_hash)
+        self.assertEqual(original_commit_hash, imported_commit_hash)
 
 if __name__ == "__main__":
     unittest.main()
