@@ -28,7 +28,7 @@ jobs:
     
     - name: Run tests
       run: |
-        coverage run -m tests.py
+        coverage run ./tests.py
         coverage xml -o coverage.xml
 
     - name: Upload coverage report
