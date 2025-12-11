@@ -152,8 +152,20 @@ class TestGitOps(unittest.TestCase):
             debug_log(f"File {file_path} content mismatch.\nExpected:\n{expected_content}\nGot:\n{content}")
             return False
         return True
+    
+    def allow_git_file_protocol(self):
+        self.old_file_allow_value = exec_cmd('git config --global --get protocol.file.allow || echo ""', verbose=False).stdout.strip()
+        self.old_file_allow_value = None if self.old_file_allow_value == "" else self.old_file_allow_value
+        exec_cmd('git config --global protocol.file.allow always')
+
+    def cleanup_git_file_protocol(self):
+        if self.old_file_allow_value is None:
+            exec_cmd('git config --global --unset protocol.file.allow', verbose=False)
+        else:
+            exec_cmd(f'git config --global protocol.file.allow {self.old_file_allow_value}', verbose=False)
 
     def setUp(self):
+        self.allow_git_file_protocol()
         self.repo_content = create_repo_content()
         self.repo_path = create_temporary_repo(self.repo_content)
         self.submodule_a_content = create_submodule_content()
@@ -192,6 +204,8 @@ class TestGitOps(unittest.TestCase):
         shutil.rmtree(self.monorepo_path)
         shutil.rmtree(self.repo_path)
         shutil.rmtree(self.submodule_a_path)
+        shutil.rmtree(self.nested_submodule_path)
+        self.cleanup_git_file_protocol()
 
     def test_repo_creation(self):
         # Verify main branch files
