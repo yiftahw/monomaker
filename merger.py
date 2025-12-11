@@ -63,6 +63,22 @@ def get_all_submodules(repo_path: str) -> List[SubmoduleDef]:
     """
     Returns list of submodule paths in the given repo.
     """
+    # retrieve all submodule commit hashes
+    # git submodule status is not recursive, which is good for us
+    submodule_hashes_raw = exec_cmd("git submodule status", cwd=repo_path).stdout
+    submodule_hashes = dict()
+    for line in submodule_hashes_raw.splitlines():
+        line = line.strip()
+        if line == "":
+            continue
+        parts = line.split()
+        if len(parts) < 2:
+            continue
+        commit_hash = parts[0].lstrip("-+")
+        path = parts[1]
+        submodule_hashes[path] = commit_hash
+
+    # read .gitmodules file to get the submodule paths and URLs
     gitmodules_path = os.path.join(repo_path, ".gitmodules")
     if not os.path.isfile(gitmodules_path):
         return []
@@ -72,10 +88,15 @@ def get_all_submodules(repo_path: str) -> List[SubmoduleDef]:
     for section in config.sections():
         if section.startswith("submodule "):
             path = config[section].get("path")
-            if path:
-                url = config[section].get("url")
-                if url:
-                    submodules.append(SubmoduleDef(path=path, url=url))
+            if not path:
+                continue
+            url = config[section].get("url")
+            if not url:
+                continue
+            commit_hash = submodule_hashes.get(path, "")
+            if commit_hash == "":
+                raise RuntimeError(f"Cannot find commit hash for submodule at path {path}")
+            submodules.append(SubmoduleDef(path, url, commit_hash))
     return submodules
 
 
@@ -113,6 +134,7 @@ class SubmoduleImportInfoEntry:
     monorepo_branch: str  # branch name in the new monorepo
     metarepo_branch: str  # what branch was used to import the metarepo files
     submodule_branch: str # what branch was used to import the submodule files
+    submodule_nested_submodules: List[SubmoduleDef] # nested submodules in this submodule branch
 
 class SubmoduleImportInfo:
     submodule_relative_path: str
@@ -120,13 +142,16 @@ class SubmoduleImportInfo:
     def __init__(self, submodule_relative_path: str):
         self.submodule_relative_path = submodule_relative_path
         self.entries = []
-    def add_entry(self, monorepo_branch: str, metarepo_branch: str, submodule_branch: str):
-        self.entries.append(SubmoduleImportInfoEntry(monorepo_branch, metarepo_branch, submodule_branch))
+    def add_entry(self, monorepo_branch: str, metarepo_branch: str, submodule_branch: str, nested_submodules: Optional[List[SubmoduleDef]] = None):
+        self.entries.append(SubmoduleImportInfoEntry(monorepo_branch, metarepo_branch, submodule_branch, nested_submodules or []))
     def __str__(self):
         s = f"Submodule Import Info for {self.submodule_relative_path}:\n"
 
         for entry in self.entries:
-            s += f"  {entry.monorepo_branch}: metarepo branch: {entry.metarepo_branch}, submodule branch: {entry.submodule_branch}\n"
+            s += f"  - {entry.monorepo_branch}: metarepo branch: {entry.metarepo_branch}, submodule branch: {entry.submodule_branch}\n"
+            s += f"    - nested submodules:\n" if len(entry.submodule_nested_submodules) > 0 else ""
+            for nested in entry.submodule_nested_submodules:
+                s += f"    path: {nested.path}, url: {nested.url}, commit: {nested.commit_hash}\n"
         return s
     def __eq__(self, other):
         if not isinstance(other, SubmoduleImportInfo):
@@ -239,7 +264,7 @@ def import_submodule(monorepo_root_dir: str,
                 print(f"Submodule branch {branch} does not exist in submodule, using default branch {submodule_default_branch} instead.")
                 branch_to_import = submodule_default_branch
 
-            # if branch doesn't exist in the metarepo, we need to create it in the monorepo from the default branch
+            # prepare monorepo branch
             metarepo_branch_used = branch
             if not branch_exists_in_metarepo:
                 # first switch to the default branch
@@ -253,13 +278,15 @@ def import_submodule(monorepo_root_dir: str,
                 exec_cmd(f"git switch {branch}", cwd=monorepo_root_dir)
             print(header_string(f"Importing {submodule_path}:{branch_to_import} to monorepo:{branch}"))
 
-            report.add_entry(branch, metarepo_branch_used, branch_to_import)
-
-            # Create a fresh clone of the submodule with just this branch
+            # prepare submodule branch clone (isolated workspace)
             branch_clone_dir_name = f"clone_{branch_to_import.replace('/', '_')}"
             branch_clone_dir = os.path.join(branches_dir, branch_clone_dir_name)
             exec_cmd(f"rm -rf {branch_clone_dir}") # might already exist if multiple metarepo branches point to same submodule branch
             exec_cmd(f"git clone -b {branch_to_import} --single-branch {submodule_repo_url} {branch_clone_dir}")
+
+            # Record in report
+            nested_submodules = get_all_submodules(branch_clone_dir)
+            report.add_entry(branch, metarepo_branch_used, branch_to_import, nested_submodules)
 
             # Run filter-repo on the isolated clone to move everything under submodule_path
             exec_cmd(f"python3 {GIT_FILTER_REPO} --force --to-subdirectory-filter {submodule_path}", cwd=branch_clone_dir)

@@ -33,7 +33,8 @@ class SubmoduleDef:
     """
     path: str
     url: str
+    commit_hash: str
 
     def __hash__(self):
         """allow to be used in sets/dicts"""
-        return hash((self.path, self.url))
+        return hash((self.path, self.url, self.commit_hash))

@@ -121,6 +121,9 @@ class TestGitOps(unittest.TestCase):
     submodule_a_path: str
     submodule_a_content: RepoContent
     submodule_relative_path: str = "submodule_a"
+    nested_submodule_path: str
+    nested_submodule_content: RepoContent
+    nested_submodule_relative_path: str = "nested_submodule"
 
     def verify_submodule_import(self, monorepo_path: str, submodule_path: str, 
                                 expected_branches: set, submodule_content: RepoContent):
@@ -155,6 +158,8 @@ class TestGitOps(unittest.TestCase):
         self.repo_path = create_temporary_repo(self.repo_content)
         self.submodule_a_content = create_submodule_content()
         self.submodule_a_path = create_temporary_repo(self.submodule_a_content)
+        self.nested_submodule_content = create_submodule_content()
+        self.nested_submodule_path = create_temporary_repo(self.nested_submodule_content)
         self.monorepo_path = create_temporary_repo(RepoContent(default_branch="main", branches=[]))
         git_test_ops.add_local_submodule(
             self.repo_path,
@@ -170,8 +175,17 @@ class TestGitOps(unittest.TestCase):
             self.submodule_relative_path,
             self.submodule_a_content.default_branch
         )
+        git_test_ops.add_local_submodule(
+            self.submodule_a_path,
+            self.submodule_a_content.default_branch,
+            self.nested_submodule_path,
+            self.nested_submodule_relative_path,
+            self.nested_submodule_content.default_branch
+        )
         # make sure we switch back to default branch (HEAD is just whatever we point to now)
         git_test_ops.switch_branch(self.repo_path, self.repo_content.default_branch)
+        git_test_ops.switch_branch(self.submodule_a_path, self.submodule_a_content.default_branch)
+        git_test_ops.switch_branch(self.nested_submodule_path, self.nested_submodule_content.default_branch)
         print(header_string("Setup complete"))
 
     def tearDown(self):
