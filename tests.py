@@ -269,9 +269,9 @@ class TestGitOps(unittest.TestCase):
         # to summarize comment from top, we expect the following combinations:
         # NOTE: case 1: `feature` branch not imported from submodule!
         expected_submodules_report = merger.SubmoduleImportInfo(self.submodule_relative_path)
-        expected_submodules_report.add_entry("main", "main")  # case 2
-        expected_submodules_report.add_entry("foo", "main")   # case 3
-        expected_submodules_report.add_entry("main", "dev")   # case 4
+        expected_submodules_report.add_entry("main", "main", "main")  # case 2: created "main" in monorepo from metarepo "main" and submodule "main"
+        expected_submodules_report.add_entry("foo", "foo", "main")    # case 3: created "foo" in monorepo from metarepo "foo" and submodule default "main"
+        expected_submodules_report.add_entry("dev", "main", "dev")    # case 4: created "dev" in monorepo from metarepo default "main" and submodule "dev"
 
         self.assertTrue(len(report.submodules_info) == 1)
         actual_submodule_report = report.submodules_info[self.submodule_relative_path]

@@ -110,8 +110,9 @@ def update_all_repo_branches(repo_root_dir: str):
 @dataclass
 class SubmoduleImportInfoEntry:
     """Represents which submodule branch applied to which metarepo branch."""
-    metarepo_branch: str
-    submodule_branch: str
+    monorepo_branch: str  # branch name in the new monorepo
+    metarepo_branch: str  # what branch was used to import the metarepo files
+    submodule_branch: str # what branch was used to import the submodule files
 
 class SubmoduleImportInfo:
     submodule_relative_path: str
@@ -119,12 +120,13 @@ class SubmoduleImportInfo:
     def __init__(self, submodule_relative_path: str):
         self.submodule_relative_path = submodule_relative_path
         self.entries = []
-    def add_entry(self, metarepo_branch: str, submodule_branch: str):
-        self.entries.append(SubmoduleImportInfoEntry(metarepo_branch, submodule_branch))
+    def add_entry(self, monorepo_branch: str, metarepo_branch: str, submodule_branch: str):
+        self.entries.append(SubmoduleImportInfoEntry(monorepo_branch, metarepo_branch, submodule_branch))
     def __str__(self):
         s = f"Submodule Import Info for {self.submodule_relative_path}:\n"
+
         for entry in self.entries:
-            s += f"  metarepo branch: {entry.metarepo_branch} -> submodule branch: {entry.submodule_branch}\n"
+            s += f"  {entry.monorepo_branch}: metarepo branch: {entry.metarepo_branch}, submodule branch: {entry.submodule_branch}\n"
         return s
     def __eq__(self, other):
         if not isinstance(other, SubmoduleImportInfo):
@@ -251,7 +253,7 @@ def import_submodule(monorepo_root_dir: str,
                 exec_cmd(f"git switch {branch}", cwd=monorepo_root_dir)
             print(header_string(f"Importing {submodule_path}:{branch_to_import} to monorepo:{branch}"))
 
-            report.add_entry(metarepo_branch_used, branch_to_import)
+            report.add_entry(branch, metarepo_branch_used, branch_to_import)
 
             # Create a fresh clone of the submodule with just this branch
             branch_clone_dir_name = f"clone_{branch_to_import.replace('/', '_')}"
@@ -301,21 +303,12 @@ def get_metarepo_tracked_submodules_mapping(repo_path: str) -> Mapping[Submodule
 
 def main_flow(metarepo_url: str, monorepo_url: Optional[str] = None) -> MigrationReport:
     report = MigrationReport()
-
     ensure_dir(SANDBOX_DIR)
-    # clone metarepo
+
+    # prepare metarepo
     metarepo_root_dir = os.path.join(SANDBOX_DIR, "metarepo")
     exec_cmd(f"git clone {metarepo_url} metarepo", cwd=SANDBOX_DIR)
     
-    # Determine metarepo default branch (after cloning, HEAD points to the default branch)
-    metarepo_default_branch = get_head_branch(metarepo_root_dir)
-    if metarepo_default_branch is None:
-        raise RuntimeError(f"Cannot determine default branch of metarepo at {metarepo_root_dir}")
-    print(f"Metarepo default branch: {metarepo_default_branch}")
-
-    # Pull all branches locally to be able to discover them and their submodules
-    metarepo_branches = update_all_repo_branches(metarepo_root_dir)
-
     # Prepare monorepo
     monorepo_root_dir = os.path.join(THIS_SCRIPT_DIR, "monorepo") # TODO: allow user to choose where to create it on disk
     if monorepo_url:
@@ -324,6 +317,15 @@ def main_flow(metarepo_url: str, monorepo_url: Optional[str] = None) -> Migratio
         ensure_dir(monorepo_root_dir)
         print(f"Creating a new empty repository at {monorepo_root_dir} ...")
         exec_cmd("git init --initial-branch=main", cwd=monorepo_root_dir, verbose_output=True)
+
+    # Determine metarepo default branch (after cloning, HEAD points to the default branch)
+    metarepo_default_branch = get_head_branch(metarepo_root_dir)
+    if metarepo_default_branch is None:
+        raise RuntimeError(f"Cannot determine default branch of metarepo at {metarepo_root_dir}")
+    print(f"Metarepo default branch: {metarepo_default_branch}")
+
+    # Pull all branches locally to be able to discover them and their submodules
+    metarepo_branches = update_all_repo_branches(metarepo_root_dir)
 
     # Import metarepo
     import_meta_repo(monorepo_root_dir, metarepo_root_dir)
