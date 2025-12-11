@@ -29,7 +29,7 @@ def get_commit_hash(repo: str, branch: str) -> str:
 
 def get_submodule_commit_hash(repo: str, submodule_path: str) -> str:
     result: CmdResult = exec_cmd(f"git submodule status {submodule_path}", cwd=repo)
-    commit_hash = result.stdout.strip().split()[0]
+    commit_hash = result.stdout.strip().split()[0].lstrip('-+')
     return commit_hash
 
 def add_submodule(repo: str, submodule_url: str, path_relative_to_repo: str):
