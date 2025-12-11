@@ -310,11 +310,38 @@ def import_submodule(monorepo_root_dir: str,
             
             # Cleanup remote (the clone directory will be cleaned up by tempdir)
             exec_cmd(f"git remote remove {remote_name}", cwd=monorepo_root_dir)
+
+            # if we found any nested submodules in this submodule, we need to remove `submodule_path/.gitmodules` file from the monorepo
+            # and then register the actual nested submodules in the monorepo
+            for nested_submodule in nested_submodules:
+                nested_submodule_relative_path_in_monorepo = os.path.join(submodule_path, nested_submodule.path)
+                nested_submodule_abs_path = os.path.join(monorepo_root_dir, nested_submodule_relative_path_in_monorepo)
+                print(header_string(f"Registering nested submodule {nested_submodule_relative_path_in_monorepo} in monorepo branch {branch}"))
+                # remove .gitmodules file if it exists
+                gitmodules_in_monorepo = os.path.join(monorepo_root_dir, submodule_path, ".gitmodules")
+                if os.path.isfile(gitmodules_in_monorepo): # if we have more than one nested submodule in the same subdirectory, we only need to remove it once
+                    print(f"Removing .gitmodules file for nested submodules at {gitmodules_in_monorepo} ...")
+                    exec_cmd(f"git rm {os.path.join(submodule_path, '.gitmodules')}", cwd=monorepo_root_dir)
+                    exec_cmd(f"git commit -m 'Remove .gitmodules file for nested submodules in {submodule_path}'", cwd=monorepo_root_dir)
+                # remove nested submodule entry from subdirectory
+                nested_submodule_exists = os.path.exists(nested_submodule_abs_path)
+                if nested_submodule_exists:
+                    print(f"Removing nested submodule files at {nested_submodule_abs_path} ...")
+                    exec_cmd(f"git rm -rf {nested_submodule_relative_path_in_monorepo}", cwd=monorepo_root_dir)
+                    exec_cmd(f"git commit -m 'Remove nested submodule {nested_submodule_relative_path_in_monorepo} files before tracking it in monorepo'", cwd=monorepo_root_dir)
+                # re-register nested submodule in monorepo
+                # `--force` is needed in case multiple branches contain the same nested submodule (likely)
+                commit_hash = nested_submodule.commit_hash
+                exec_cmd(f"git submodule add --force {nested_submodule.url} {nested_submodule_relative_path_in_monorepo}", cwd=monorepo_root_dir)
+                exec_cmd(f"git checkout {commit_hash}", cwd=nested_submodule_abs_path)
+                exec_cmd(f"git commit -m 'Add nested submodule {nested_submodule_relative_path_in_monorepo} at commit {commit_hash}'", cwd=monorepo_root_dir)
+                
     return report
 
 def get_metarepo_tracked_submodules_mapping(repo_path: str) -> Mapping[SubmoduleDef, Set[str]]:
     """
-    Scans all branches in the given metarepo, and returns a mapping of submodules to the set of branches that track them.
+    Scans all branches in the given metarepo,  
+    returns a mapping of {submodule -> set of branches that track them in the metarepo}.
     """
     tracked_submodules: Mapping[SubmoduleDef, Set[str]] = dict()
     branches = get_all_branches(repo_path)
@@ -323,6 +350,10 @@ def get_metarepo_tracked_submodules_mapping(repo_path: str) -> Mapping[Submodule
         exec_cmd(f"git checkout {branch}", cwd=repo_path)
         submodules_in_branch = get_all_submodules(repo_path)
         for submodule in submodules_in_branch:
+            # ignore commit hash for tracking purposes, 
+            # as we only care here about existence of submodule in branch
+            # TODO: find a cleaner solution for this?
+            submodule.commit_hash = ""
             if submodule not in tracked_submodules:
                 tracked_submodules[submodule] = set()
             tracked_submodules[submodule].add(branch)
