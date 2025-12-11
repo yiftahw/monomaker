@@ -26,5 +26,15 @@ jobs:
     - name: Get git-filter-repo
       run: ./get-git-filter-repo.sh
     
-    - name: Run tests
-      run: python3 tests.py
+    - name: Run tests with coverage
+      run: |
+        coverage run -m unittest tests
+        coverage report -m
+        coverage xml
+    
+    - name: Coverage comment
+      uses: py-cov-action/python-coverage-comment-action@v3
+      with:
+        GITHUB_TOKEN: ${{ github.token }}
+        MINIMUM_GREEN: 80
+        MINIMUM_ORANGE: 60
