@@ -305,5 +305,19 @@ class TestGitOps(unittest.TestCase):
         actual_submodule_report = report.submodules_info[self.submodule_relative_path]
         self.assertTrue(actual_submodule_report == expected_submodules_report) # the report overloads `__eq__`
 
+        # verify nested submodule is tracked correctly in the monorepo
+        # <root>/submodule_a/nested_submodule default branch should be a direct submodule of the monorepo default branch
+        git_test_ops.switch_branch(self.monorepo_path, default_branch)
+        submodules_in_monorepo = merger.get_all_submodules(self.monorepo_path)
+        self.assertEqual(1, len(submodules_in_monorepo))
+        nested_submodule_in_monorepo = submodules_in_monorepo[0]
+        expected_path = os.path.join(self.submodule_relative_path, self.nested_submodule_relative_path)
+        self.assertEqual(nested_submodule_in_monorepo.path, expected_path)
+        original_commit_hash = git_test_ops.get_commit_hash(self.nested_submodule_path, self.nested_submodule_content.default_branch)
+        current_commit_hash = git_test_ops.get_submodule_commit_hash(self.monorepo_path, expected_path)
+        imported_commit_hash = nested_submodule_in_monorepo.commit_hash
+        self.assertEqual(original_commit_hash, current_commit_hash)
+        self.assertEqual(original_commit_hash, imported_commit_hash)
+
 if __name__ == "__main__":
     unittest.main()
