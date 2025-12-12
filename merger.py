@@ -61,7 +61,7 @@ def get_head_branch(repo_path: str) -> Optional[str]:
 
 def get_all_submodules(repo_path: str) -> List[SubmoduleDef]:
     """
-    Returns list of submodule paths in the given repo.
+    Returns list of submodule paths in the given repo (at its current HEAD)
     """
     # retrieve all submodule commit hashes
     # git submodule status is not recursive, which is good for us

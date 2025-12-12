@@ -63,8 +63,12 @@ def add_local_submodule(repo_path: str, repo_branch: str, submodule_path: str, p
     :type branch: str
     """
     switch_branch(repo_path, repo_branch)
+    # add the submodule (default branch will be checked out)
     cmd = f"git submodule add {repo_url(submodule_path)} {path_relative_to_repo}"
     exec_cmd(cmd, cwd=repo_path)
-    submodule_path = os.path.join(repo_path, path_relative_to_repo)
-    switch_branch(submodule_path, branch)
+    submodule_dir_in_repo = os.path.join(repo_path, path_relative_to_repo)
+    # switch to exact commit hash and stage the change
+    switch_branch(submodule_dir_in_repo, branch)
+    exec_cmd("git add .", cwd=repo_path)
+    # commit the addition of the submodule at the desired branch/commit
     exec_cmd(f"git commit -m 'Add local submodule {path_relative_to_repo} branch: {branch}'", cwd=repo_path)

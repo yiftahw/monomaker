@@ -84,6 +84,16 @@ def create_repo_content() -> RepoContent:
                         commit_msg="Add foo.txt"
                     )
                 ]
+            ),
+            BranchContent(
+                name="bar",
+                files=[
+                    FileContent(
+                        filename="bar.txt",
+                        content="bar branch file.",
+                        commit_msg="Add bar.txt"
+                    )
+                ]
             )
         ]
     )
@@ -122,6 +132,19 @@ def create_submodule_content() -> RepoContent:
                         filename="barsub.txt",
                         content="bar branch file in submodule.",
                         commit_msg="Add barsub.txt"
+                    )
+                ]
+            ),
+            # we will use "bar" branch to demonstrate
+            # that different branches can track the same nested submodule
+            # with a different commit hash (i.e upgrading a tag or branch)
+            BranchContent(
+                name="bar",
+                files=[
+                    FileContent(
+                        filename="bazsub.txt",
+                        content="baz branch file in submodule.",
+                        commit_msg="Add bazsub.txt"
                     )
                 ]
             )
@@ -209,6 +232,26 @@ class TestGitOps(unittest.TestCase):
         self.nested_submodule_content = create_submodule_content()
         self.nested_submodule_path = create_temporary_repo(self.nested_submodule_content)
         self.monorepo_path = create_temporary_repo(RepoContent(default_branch="main", branches=[]))
+        # bottom up submodule registration
+        # this way we don't need to pull new commits into submodules after adding them
+
+        # register nested submodule in submodule_a under default branch
+        git_test_ops.add_local_submodule(
+            self.submodule_a_path,
+            self.submodule_a_content.default_branch,
+            self.nested_submodule_path,
+            self.nested_submodule_relative_path,
+            self.nested_submodule_content.default_branch
+        )
+        # register nested submodule in submodule_a under "bar" branch
+        git_test_ops.add_local_submodule(
+            self.submodule_a_path,
+            "bar",
+            self.nested_submodule_path,
+            self.nested_submodule_relative_path,
+            "bar"
+        )
+        
         # register the submodule in the metarepo under default branch
         git_test_ops.add_local_submodule(
             self.repo_path,
@@ -225,20 +268,22 @@ class TestGitOps(unittest.TestCase):
             self.submodule_relative_path,
             self.submodule_a_content.default_branch
         )
-        # register nested submodule in submodule_a under default branch
+        # register it under "bar" as well, which will track a different nested submodule commit
         git_test_ops.add_local_submodule(
+            self.repo_path,
+            "bar",
             self.submodule_a_path,
-            self.submodule_a_content.default_branch,
-            self.nested_submodule_path,
-            self.nested_submodule_relative_path,
-            self.nested_submodule_content.default_branch
+            self.submodule_relative_path,
+            "bar"
         )
+
         # make sure we switch back to default branch (HEAD is just whatever we point to now)
         git_test_ops.switch_branch(self.repo_path, self.repo_content.default_branch)
         git_test_ops.switch_branch(self.submodule_a_path, self.submodule_a_content.default_branch)
         git_test_ops.switch_branch(self.nested_submodule_path, self.nested_submodule_content.default_branch)
         self.nested_submodule_url = git_test_ops.repo_url(self.nested_submodule_path)
         self.nested_submodule_default_branch_commit_hash = git_test_ops.get_commit_hash(self.nested_submodule_path, self.nested_submodule_content.default_branch)
+        self.nested_submodule_bar_branch_commit_hash = git_test_ops.get_commit_hash(self.nested_submodule_path, "bar")
         print(header_string("Setup complete"))
 
     def tearDown(self):
@@ -299,29 +344,33 @@ class TestGitOps(unittest.TestCase):
 
         # checks to see import was successful
         # "feature" branch should exist in the monorepo (it exists in the metarepo)
-        monorepo_expected_branches = set(["main", "feature", "foo", "dev"])
+        monorepo_expected_branches = set(["main", "feature", "foo", "dev", "bar"])
         monorepo_actual_branches = set(merger.get_all_branches(self.monorepo_path))
         self.assertEqual(monorepo_expected_branches, monorepo_actual_branches)
         
         # but "feature" should not be imported from the submodule (the metarepo "feature" branch doesn't track the submodule)
         # hence, it is not part of the expected submodule import report
         # verify we imported the submodule branches correctly, and we track the nested submodules correctly
-        expected_nested_submodule_tracking = [merger.SubmoduleDef(self.nested_submodule_relative_path, self.nested_submodule_url, self.nested_submodule_default_branch_commit_hash)]
+        expected_nested_submodule_default_tracking = [merger.SubmoduleDef(self.nested_submodule_relative_path, self.nested_submodule_url, self.nested_submodule_default_branch_commit_hash)]
+        expected_nested_submodule_bar_tracking = [merger.SubmoduleDef(self.nested_submodule_relative_path, self.nested_submodule_url, self.nested_submodule_bar_branch_commit_hash)]
         expected_submodule_report = merger.SubmoduleImportInfo(self.submodule_relative_path)
         # case 2: created "main" in monorepo from metarepo "main" and submodule "main"
         # submodule_a default branch "main" tracks nested_submodule default "main"
-        expected_submodule_report.add_entry("main", "main", "main", expected_nested_submodule_tracking)
+        expected_submodule_report.add_entry("main", "main", "main", expected_nested_submodule_default_tracking)
         # case 3: created "foo" in monorepo from metarepo "foo" and submodule default "main"
         # submodule_a default branch "main" tracks nested_submodule default "main"
-        expected_submodule_report.add_entry("foo", "foo", "main", expected_nested_submodule_tracking)
+        expected_submodule_report.add_entry("foo", "foo", "main", expected_nested_submodule_default_tracking)
         # case 4: created "dev" in monorepo from metarepo default "main" and submodule "dev"
         expected_submodule_report.add_entry("dev", "main", "dev")
+        # "bar" branch in metarepo tracks "bar" branch in submodule
+        # (case 2 variant, different nested submodule commit hash)
+        expected_submodule_report.add_entry("bar", "bar", "bar", expected_nested_submodule_bar_tracking)
         expected_migration_report = merger.MigrationReport()
         expected_migration_report.add_submodule_entry(self.submodule_relative_path, expected_submodule_report)
         self.assertEqual(report, expected_migration_report)
 
-        # verify file contents
-        submodule_expected_branches = set(["main", "dev"])
+        # verify file contents in each monorepo branch that imported stuff from the submodule
+        submodule_expected_branches = set(["main", "dev", "bar"])
         for submodule in report.submodules_info.keys():
             self.assertSubmoduleImport(self.monorepo_path, submodule, submodule_expected_branches, self.submodule_a_content)
             
