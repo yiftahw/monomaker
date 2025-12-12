@@ -27,24 +27,8 @@ def get_commit_hash(repo: str, branch: str) -> str:
     result: CmdResult = exec_cmd(f"git rev-parse {branch}", cwd=repo)
     return result.stdout.strip()
 
-def get_submodule_commit_hash(repo: str, submodule_path: str) -> str:
-    result: CmdResult = exec_cmd(f"git submodule status {submodule_path}", cwd=repo)
-    commit_hash = result.stdout.strip().split()[0].lstrip('-+')
-    return commit_hash
-
-def add_submodule(repo: str, submodule_url: str, path_relative_to_repo: str):
-    """
-    Docstring for add_submodule
-    
-    :param repo: root to repository that will track the submodule
-    :type repo: str
-    :param submodule_url: URL of the submodule repository
-    :type submodule_url: str
-    :param path_relative_to_repo: Path where the submodule will be added
-    :type path_relative_to_repo: str
-    """
-    exec_cmd(f"git submodule add {submodule_url} {path_relative_to_repo}", cwd=repo)
-    exec_cmd("git commit -m 'Add submodule'", cwd=repo)
+def repo_url(repo_path: str) -> str:
+    return f"file://{repo_path}"
 
 def add_local_submodule(repo_path: str, repo_branch: str, submodule_path: str, path_relative_to_repo: str, branch: str = "main"):
     """
@@ -60,8 +44,12 @@ def add_local_submodule(repo_path: str, repo_branch: str, submodule_path: str, p
     :type branch: str
     """
     switch_branch(repo_path, repo_branch)
-    cmd = f"git submodule add file://{submodule_path} {path_relative_to_repo}"
+    # add the submodule (default branch will be checked out)
+    cmd = f"git submodule add {repo_url(submodule_path)} {path_relative_to_repo}"
     exec_cmd(cmd, cwd=repo_path)
-    submodule_path = os.path.join(repo_path, path_relative_to_repo)
-    switch_branch(submodule_path, branch)
+    submodule_dir_in_repo = os.path.join(repo_path, path_relative_to_repo)
+    # switch to exact commit hash and stage the change
+    switch_branch(submodule_dir_in_repo, branch)
+    exec_cmd("git add .", cwd=repo_path)
+    # commit the addition of the submodule at the desired branch/commit
     exec_cmd(f"git commit -m 'Add local submodule {path_relative_to_repo} branch: {branch}'", cwd=repo_path)

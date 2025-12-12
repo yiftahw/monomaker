@@ -61,7 +61,7 @@ def get_head_branch(repo_path: str) -> Optional[str]:
 
 def get_all_submodules(repo_path: str) -> List[SubmoduleDef]:
     """
-    Returns list of submodule paths in the given repo.
+    Returns list of submodule paths in the given repo (at its current HEAD)
     """
     # retrieve all submodule commit hashes
     # git submodule status is not recursive, which is good for us
@@ -135,6 +135,15 @@ class SubmoduleImportInfoEntry:
     metarepo_branch: str  # what branch was used to import the metarepo files
     submodule_branch: str # what branch was used to import the submodule files
     submodule_nested_submodules: List[SubmoduleDef] # nested submodules in this submodule branch
+    def __eq__(self, other):
+        if not isinstance(other, SubmoduleImportInfoEntry):
+            print("Other is not SubmoduleImportInfoEntry")
+            return False
+        return (self.monorepo_branch == other.monorepo_branch and
+                self.metarepo_branch == other.metarepo_branch and
+                sorted(self.submodule_nested_submodules) == sorted(other.submodule_nested_submodules))
+    def __str__(self):
+        return f"SubmoduleImportInfoEntry(monorepo_branch={self.monorepo_branch}, metarepo_branch={self.metarepo_branch}, submodule_branch={self.submodule_branch}, nested_submodules={self.submodule_nested_submodules})"
 
 class SubmoduleImportInfo:
     submodule_relative_path: str
@@ -169,8 +178,8 @@ class SubmoduleImportInfo:
         self.entries.sort(key=key_func)
         other.entries.sort(key=key_func)
         for e1, e2 in zip(self.entries, other.entries):
-            if e1.metarepo_branch != e2.metarepo_branch or e1.submodule_branch != e2.submodule_branch:
-                print(f"Entries differ: {e1} != {e2}")
+            if e1 != e2:
+                print(f"Entries differ:\n{e1}\n{e2}")
                 return False
         return True
 
@@ -185,6 +194,18 @@ class MigrationReport:
         for _, info in self.submodules_info.items():
             s += str(info) + "\n"
         return s
+    def __eq__(self, other):
+        if not isinstance(other, MigrationReport):
+            print("Other is not MigrationReport")
+            return False
+        if set(self.submodules_info.keys()) != set(other.submodules_info.keys()):
+            print(f"Submodule keys differ: {set(self.submodules_info.keys())} != {set(other.submodules_info.keys())}")
+            return False
+        for key in self.submodules_info.keys():
+            if self.submodules_info[key] != other.submodules_info[key]:
+                print(f"Submodule info for {key} differs")
+                return False
+        return True
 
 def import_submodule(monorepo_root_dir: str,
                      submodule_repo_url: str,
@@ -224,7 +245,7 @@ def import_submodule(monorepo_root_dir: str,
             print(f"import_submodule(): warning: metarepo_tracked_branches is None, all submodule branches will be imported into the monorepo.")
         
         # branches_clusure: all branches that need to be considered for this submodule
-        # if the submodule itself doesn't contain some branch from the closure, we will use the submodule's default branch instead
+        # see comments below for details
         branches_closure = submodule_branches.copy()
         if metarepo_tracked_branches is not None:
             branches_closure.update(metarepo_tracked_branches)
@@ -278,7 +299,7 @@ def import_submodule(monorepo_root_dir: str,
                 exec_cmd(f"git switch {branch}", cwd=monorepo_root_dir)
             print(header_string(f"Importing {submodule_path}:{branch_to_import} to monorepo:{branch}"))
 
-            # prepare submodule branch clone (isolated workspace)
+            # prepare submodule branch clone (isolated workspace, git-filter-repo modifies its git history)
             branch_clone_dir_name = f"clone_{branch_to_import.replace('/', '_')}"
             branch_clone_dir = os.path.join(branches_dir, branch_clone_dir_name)
             exec_cmd(f"rm -rf {branch_clone_dir}") # might already exist if multiple metarepo branches point to same submodule branch
@@ -361,8 +382,8 @@ def get_metarepo_tracked_submodules_mapping(repo_path: str) -> Mapping[Submodule
 
 @dataclass
 class WorkspaceMetadata:
-    metarepo_root_dir: str
     monorepo_root_dir: str
+    metarepo_root_dir: str
     metarepo_default_branch: str
     metarepo_branches: List[str]
 
@@ -392,8 +413,8 @@ def prepare_workspace(metarepo_url: str, monorepo_url: Optional[str] = None):
     metarepo_branches = update_all_repo_branches(metarepo_root_dir)
 
     return WorkspaceMetadata(
-        metarepo_root_dir=metarepo_root_dir,
         monorepo_root_dir=monorepo_root_dir,
+        metarepo_root_dir=metarepo_root_dir,
         metarepo_default_branch=metarepo_default_branch,
         metarepo_branches=metarepo_branches
     )
@@ -403,8 +424,8 @@ def main_flow(params: WorkspaceMetadata) -> MigrationReport:
     report = MigrationReport()
 
     # destructure params
-    metarepo_root_dir = params.metarepo_root_dir
     monorepo_root_dir = params.monorepo_root_dir
+    metarepo_root_dir = params.metarepo_root_dir
     metarepo_default_branch = params.metarepo_default_branch
     metarepo_branches = params.metarepo_branches
 
