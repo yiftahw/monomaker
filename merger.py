@@ -54,7 +54,7 @@ def get_head_branch(repo_path: str) -> Optional[str]:
     cmd = "git rev-parse --abbrev-ref HEAD"
     out = exec_cmd(cmd, cwd=repo_path)
     default_branch = out.stdout.strip()
-    if default_branch == "HEAD" or default_branch == "no branch" or default_branch == "":
+    if default_branch == "HEAD" or default_branch.find("no branch") != -1 or default_branch == "":
         return None
     return default_branch
 
@@ -359,14 +359,20 @@ def get_metarepo_tracked_submodules_mapping(repo_path: str) -> Mapping[Submodule
             tracked_submodules[submodule].add(branch)
     return tracked_submodules
 
-def main_flow(metarepo_url: str, monorepo_url: Optional[str] = None) -> MigrationReport:
-    report = MigrationReport()
+@dataclass
+class WorkspaceMetadata:
+    metarepo_root_dir: str
+    monorepo_root_dir: str
+    metarepo_default_branch: str
+    metarepo_branches: List[str]
+
+def prepare_workspace(metarepo_url: str, monorepo_url: Optional[str] = None):
     ensure_dir(SANDBOX_DIR)
 
     # prepare metarepo
     metarepo_root_dir = os.path.join(SANDBOX_DIR, "metarepo")
     exec_cmd(f"git clone {metarepo_url} metarepo", cwd=SANDBOX_DIR)
-    
+
     # Prepare monorepo
     monorepo_root_dir = os.path.join(THIS_SCRIPT_DIR, "monorepo") # TODO: allow user to choose where to create it on disk
     if monorepo_url:
@@ -385,12 +391,29 @@ def main_flow(metarepo_url: str, monorepo_url: Optional[str] = None) -> Migratio
     # Pull all branches locally to be able to discover them and their submodules
     metarepo_branches = update_all_repo_branches(metarepo_root_dir)
 
+    return WorkspaceMetadata(
+        metarepo_root_dir=metarepo_root_dir,
+        monorepo_root_dir=monorepo_root_dir,
+        metarepo_default_branch=metarepo_default_branch,
+        metarepo_branches=metarepo_branches
+    )
+
+
+def main_flow(params: WorkspaceMetadata) -> MigrationReport:
+    report = MigrationReport()
+
+    # destructure params
+    metarepo_root_dir = params.metarepo_root_dir
+    monorepo_root_dir = params.monorepo_root_dir
+    metarepo_default_branch = params.metarepo_default_branch
+    metarepo_branches = params.metarepo_branches
+
     # Import metarepo
     import_meta_repo(monorepo_root_dir, metarepo_root_dir)
 
-    # Some branches in the metarepo may or may not have some submodules
-    # So we need to scan all metarepo branches for submodules, to know which submodules to import
-    # for each submodule, we will track which metarepo branches track it
+    # Some branches in the metarepo may or may not track some submodules
+    # So we need to scan all metarepo branches for submodules, to know which ones to import.
+    # for each submodule, we will bookkeep which metarepo branches track it.
     metarepo_tracked_submodules_mapping = get_metarepo_tracked_submodules_mapping(metarepo_root_dir)
 
     print(f"Submodules to import:")
@@ -422,7 +445,9 @@ def main():
         help="Optional URL of an existing monorepo to merge into. If not provided, a new empty monorepo will be created."
     )
     args = parser.parse_args()
-    main_flow(args.metarepo_url, args.monorepo_url)
+    workspace_params = prepare_workspace(args.metarepo_url, args.monorepo_url)
+    migration_report = main_flow(workspace_params)
+    print(migration_report)
 
 if __name__ == "__main__":
     main()
