@@ -32,20 +32,6 @@ def get_submodule_commit_hash(repo: str, submodule_path: str) -> str:
     commit_hash = result.stdout.strip().split()[0].lstrip('-+')
     return commit_hash
 
-def add_submodule(repo: str, submodule_url: str, path_relative_to_repo: str):
-    """
-    Docstring for add_submodule
-    
-    :param repo: root to repository that will track the submodule
-    :type repo: str
-    :param submodule_url: URL of the submodule repository
-    :type submodule_url: str
-    :param path_relative_to_repo: Path where the submodule will be added
-    :type path_relative_to_repo: str
-    """
-    exec_cmd(f"git submodule add {submodule_url} {path_relative_to_repo}", cwd=repo)
-    exec_cmd("git commit -m 'Add submodule'", cwd=repo)
-
 def repo_url(repo_path: str) -> str:
     return f"file://{repo_path}"
 
