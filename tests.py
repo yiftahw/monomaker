@@ -111,6 +111,19 @@ def create_submodule_content() -> RepoContent:
                         commit_msg="Add devfile.txt"
                     )
                 ]
+            ),
+            # although both metarepo and submodule have "feature" branch,
+            # the metarepo "feature" branch will not track the submodule's "feature" branch
+            # hence it will not be imported into the monorepo (but the monorepo will have the metarepo "feature" branch content)
+            BranchContent(
+                name="feature",
+                files=[
+                    FileContent(
+                        filename="barsub.txt",
+                        content="bar branch file in submodule.",
+                        commit_msg="Add barsub.txt"
+                    )
+                ]
             )
         ]
     )
@@ -125,21 +138,6 @@ class TestGitOps(unittest.TestCase):
     nested_submodule_content: RepoContent
     nested_submodule_relative_path: str = "nested_submodule"
 
-    def verify_submodule_import(self, monorepo_path: str, submodule_path: str, 
-                                expected_branches: set, submodule_content: RepoContent):
-        """Verify that submodule branches and files were correctly imported into monorepo."""
-        # verify all branches were imported
-        monorepo_branches = set(merger.get_all_branches(monorepo_path))
-        self.assertTrue(expected_branches.issubset(monorepo_branches), f"Expected branches {expected_branches} not all found in monorepo branches {monorepo_branches}")
-        
-        # verify files in each branch
-        for branch in submodule_content.branches:
-            # we switch branches in the main repo, submodule files should now exist in it
-            git_test_ops.switch_branch(monorepo_path, branch.name)
-            submodule_files = set([file.filename for file in branch.files])
-            imported_files = set(os.listdir(os.path.join(monorepo_path, submodule_path)))
-            self.assertTrue(submodule_files.issubset(imported_files))
-
     def check_file_content(self, repo_path: str, filename: str, expected_content: str) -> bool:
         file_path = os.path.join(repo_path, filename)
         if not os.path.isfile(file_path):
@@ -152,7 +150,45 @@ class TestGitOps(unittest.TestCase):
             debug_log(f"File {file_path} content mismatch.\nExpected:\n{expected_content}\nGot:\n{content}")
             return False
         return True
+
+    def assertSubmoduleImport(self, monorepo_path: str, submodule_relative_path: str, 
+                                expected_branches: set, submodule_content: RepoContent):
+        """Verify that submodule branches and files were correctly imported into monorepo."""
+        # verify expected submodule branches were imported
+        monorepo_branches = set(merger.get_all_branches(monorepo_path))
+        self.assertTrue(expected_branches.issubset(monorepo_branches), f"Expected branches {expected_branches} not all found in monorepo branches {monorepo_branches}")
+        
+        # verify files were imported, and their content is correct
+        for branch in submodule_content.branches:
+            if branch.name not in expected_branches:
+                continue
+            # we switch branches in the main repo, submodule files should now exist in it
+            git_test_ops.switch_branch(monorepo_path, branch.name)
+            submodule_files = set([file.filename for file in branch.files])
+            imported_files = set(os.listdir(os.path.join(monorepo_path, submodule_relative_path)))
+            self.assertTrue(submodule_files.issubset(imported_files), f"Expected files {submodule_files} not all found in imported files {imported_files} for branch {branch.name}, expected branches: {expected_branches}")
+            for file in branch.files:
+                self.assertTrue(self.check_file_content(os.path.join(monorepo_path, submodule_relative_path), file.filename, file.content))
     
+    def assertNestedSubmoduleTracking(self, monorepo_default_branch: str):
+        # verify nested submodule is tracked correctly in the monorepo
+        # <root>/submodule_a/nested_submodule default branch should be a direct submodule of the monorepo default branch
+        
+        # verify we are tracking exactly 1 nested submodule
+        git_test_ops.switch_branch(self.monorepo_path, monorepo_default_branch)
+        submodules_in_monorepo = merger.get_all_submodules(self.monorepo_path)
+        self.assertEqual(1, len(submodules_in_monorepo))
+        nested_submodule_in_monorepo = submodules_in_monorepo[0]
+        
+        expected_path = os.path.join(self.submodule_relative_path, self.nested_submodule_relative_path)
+        self.assertEqual(nested_submodule_in_monorepo.path, expected_path)
+        
+        original_commit_hash = git_test_ops.get_commit_hash(self.nested_submodule_path, self.nested_submodule_content.default_branch)
+        current_commit_hash = git_test_ops.get_submodule_commit_hash(self.monorepo_path, expected_path)
+        imported_commit_hash = nested_submodule_in_monorepo.commit_hash
+        self.assertEqual(original_commit_hash, current_commit_hash)
+        self.assertEqual(original_commit_hash, imported_commit_hash)
+
     def allow_git_file_protocol(self):
         self.old_file_allow_value = exec_cmd('git config --global --get protocol.file.allow || echo ""', verbose=False).stdout.strip()
         self.old_file_allow_value = None if self.old_file_allow_value == "" else self.old_file_allow_value
@@ -173,6 +209,7 @@ class TestGitOps(unittest.TestCase):
         self.nested_submodule_content = create_submodule_content()
         self.nested_submodule_path = create_temporary_repo(self.nested_submodule_content)
         self.monorepo_path = create_temporary_repo(RepoContent(default_branch="main", branches=[]))
+        # register the submodule in the metarepo under default branch
         git_test_ops.add_local_submodule(
             self.repo_path,
             self.repo_content.default_branch,
@@ -180,6 +217,7 @@ class TestGitOps(unittest.TestCase):
             self.submodule_relative_path,
             self.submodule_a_content.default_branch
         )
+        # register the submodule in the metarepo under "foo" branch
         git_test_ops.add_local_submodule(
             self.repo_path,
             "foo",
@@ -187,6 +225,7 @@ class TestGitOps(unittest.TestCase):
             self.submodule_relative_path,
             self.submodule_a_content.default_branch
         )
+        # register nested submodule in submodule_a under default branch
         git_test_ops.add_local_submodule(
             self.submodule_a_path,
             self.submodule_a_content.default_branch,
@@ -198,6 +237,8 @@ class TestGitOps(unittest.TestCase):
         git_test_ops.switch_branch(self.repo_path, self.repo_content.default_branch)
         git_test_ops.switch_branch(self.submodule_a_path, self.submodule_a_content.default_branch)
         git_test_ops.switch_branch(self.nested_submodule_path, self.nested_submodule_content.default_branch)
+        self.nested_submodule_url = git_test_ops.repo_url(self.nested_submodule_path)
+        self.nested_submodule_default_branch_commit_hash = git_test_ops.get_commit_hash(self.nested_submodule_path, self.nested_submodule_content.default_branch)
         print(header_string("Setup complete"))
 
     def tearDown(self):
@@ -244,80 +285,45 @@ class TestGitOps(unittest.TestCase):
             for file in branch.files:
                 self.assertTrue(self.check_file_content(self.monorepo_path, file.filename, file.content))
 
-    def test_merger_import_submodule(self):
-        # test needs to handle the 4 cases described in `import_submodule` function
-        # 1. branch exists in metarepo but doesn't track submodule -> skip import
-        # cases 2,3,4 assume metarepo branch tracks the submodule
-        # - metarepo `feature` branch doesn't track the submodule - should not exist in monorepo after import
-        # 2. "feature" branch exists in metarepo and in submodule -> import normally (i.e both use the "feature" branch)
-        # - metarepo `main` branch tracks submodule `main` branch
-        # 3. "feature" branch exists in metarepo but not in submodule -> use metarepo "feature" branch, use submodule default branch
-        # - metarepo `foo` branch tracks submodule, but submodule doesn't have `foo` branch -> use submodule default branch `main`
-        # 4. "feature" branch doesn't exist in metarepo but exists in submodule -> use metarepo default branch, use submodule "feature" branch
-        # - "dev" branch exists in submodule but not in metarepo -> use metarepo default branch `main`, submodule `dev` branch
-
-        # first thing we do after clone is to get the HEAD, it will be consider the default
-        default_branch = merger.get_head_branch(self.repo_path)
-        self.assertTrue(default_branch == "main")
-        metarepo_tracked_submodules_mapping = merger.get_metarepo_tracked_submodules_mapping(self.repo_path)
-        # import the main repo first
-        merger.import_meta_repo(self.monorepo_path, self.repo_path)
-        # import all submodules
-        submodules = metarepo_tracked_submodules_mapping.keys()
-        submodule_names = [submodule.path for submodule in submodules]
-        self.assertEqual(submodule_names, ["submodule_a"])
-        print(header_string(f"Found submodules to import: {submodule_names}"))
-
-        report = merger.MigrationReport()
-        for submodule in submodules:
-            print(header_string(f"Importing submodule {submodule.path}"))
-            submodule_path_in_metarepo = os.path.join(self.repo_path, submodule.path)
-            # need to have local copies of all branches to be able to clone (copy) them locally (without network)
-            # this is because we modify (in a destructive way) the .git content when running git-filter-repo
-            merger.update_all_repo_branches(submodule_path_in_metarepo)
-            expected_submodule_branches = set(merger.get_all_branches(submodule_path_in_metarepo))
-            print(header_string(f"Expected submodule {submodule.path} branches: {expected_submodule_branches}"))
-            # import the submodule (clones it locally per branch, modifies it, and merges into the monorepo)
-            submodule_report = merger.import_submodule(self.monorepo_path, 
-                submodule.url, 
-                submodule.path, 
-                default_branch, 
-                set(merger.get_all_branches(self.repo_path)), 
-                expected_submodule_branches, 
-                metarepo_tracked_submodules_mapping[submodule])
-            report.add_submodule_entry(submodule.path, submodule_report)
-
-            # verify the import was successful
-            self.verify_submodule_import(self.monorepo_path, submodule.path, 
-                                        expected_submodule_branches, self.submodule_a_content)
-            
-        print(header_string("Migration Report"))
+    def test_merger_main_flow(self):
+       # prepare params for main flow
+        params = merger.WorkspaceMetadata(
+            monorepo_root_dir=self.monorepo_path,
+            metarepo_root_dir=self.repo_path,
+            metarepo_default_branch=merger.get_head_branch(self.repo_path),
+            metarepo_branches=merger.get_all_branches(self.repo_path)
+        )
+        report = merger.main_flow(params)
+        print(header_string("Migration Report from main_flow"))
         print(report)
 
-        # to summarize comment from top, we expect the following combinations:
-        # NOTE: case 1: `feature` branch not imported from submodule!
-        expected_submodules_report = merger.SubmoduleImportInfo(self.submodule_relative_path)
-        expected_submodules_report.add_entry("main", "main", "main")  # case 2: created "main" in monorepo from metarepo "main" and submodule "main"
-        expected_submodules_report.add_entry("foo", "foo", "main")    # case 3: created "foo" in monorepo from metarepo "foo" and submodule default "main"
-        expected_submodules_report.add_entry("dev", "main", "dev")    # case 4: created "dev" in monorepo from metarepo default "main" and submodule "dev"
+        # checks to see import was successful
+        # "feature" branch should exist in the monorepo (it exists in the metarepo)
+        monorepo_expected_branches = set(["main", "feature", "foo", "dev"])
+        monorepo_actual_branches = set(merger.get_all_branches(self.monorepo_path))
+        self.assertEqual(monorepo_expected_branches, monorepo_actual_branches)
+        
+        # but "feature" should not be imported from the submodule (the metarepo "feature" branch doesn't track the submodule)
+        # hence, it is not part of the expected submodule import report
+        # verify we imported the submodule branches correctly, and we track the nested submodules correctly
+        expected_nested_submodule_tracking = [merger.SubmoduleDef(self.nested_submodule_relative_path, self.nested_submodule_url, self.nested_submodule_default_branch_commit_hash)]
+        expected_submodule_report = merger.SubmoduleImportInfo(self.submodule_relative_path)
+        # case 2: created "main" in monorepo from metarepo "main" and submodule "main"
+        # submodule_a default branch "main" tracks nested_submodule default "main"
+        expected_submodule_report.add_entry("main", "main", "main", expected_nested_submodule_tracking)
+        # case 3: created "foo" in monorepo from metarepo "foo" and submodule default "main"
+        # submodule_a default branch "main" tracks nested_submodule default "main"
+        expected_submodule_report.add_entry("foo", "foo", "main", expected_nested_submodule_tracking)
+        # case 4: created "dev" in monorepo from metarepo default "main" and submodule "dev"
+        expected_submodule_report.add_entry("dev", "main", "dev")
+        expected_migration_report = merger.MigrationReport()
+        expected_migration_report.add_submodule_entry(self.submodule_relative_path, expected_submodule_report)
+        self.assertEqual(report, expected_migration_report)
 
-        self.assertTrue(len(report.submodules_info) == 1)
-        actual_submodule_report = report.submodules_info[self.submodule_relative_path]
-        self.assertTrue(actual_submodule_report == expected_submodules_report) # the report overloads `__eq__`
-
-        # verify nested submodule is tracked correctly in the monorepo
-        # <root>/submodule_a/nested_submodule default branch should be a direct submodule of the monorepo default branch
-        git_test_ops.switch_branch(self.monorepo_path, default_branch)
-        submodules_in_monorepo = merger.get_all_submodules(self.monorepo_path)
-        self.assertEqual(1, len(submodules_in_monorepo))
-        nested_submodule_in_monorepo = submodules_in_monorepo[0]
-        expected_path = os.path.join(self.submodule_relative_path, self.nested_submodule_relative_path)
-        self.assertEqual(nested_submodule_in_monorepo.path, expected_path)
-        original_commit_hash = git_test_ops.get_commit_hash(self.nested_submodule_path, self.nested_submodule_content.default_branch)
-        current_commit_hash = git_test_ops.get_submodule_commit_hash(self.monorepo_path, expected_path)
-        imported_commit_hash = nested_submodule_in_monorepo.commit_hash
-        self.assertEqual(original_commit_hash, current_commit_hash)
-        self.assertEqual(original_commit_hash, imported_commit_hash)
-
+        # verify file contents
+        submodule_expected_branches = set(["main", "dev"])
+        for submodule in report.submodules_info.keys():
+            self.assertSubmoduleImport(self.monorepo_path, submodule, submodule_expected_branches, self.submodule_a_content)
+            
 if __name__ == "__main__":
     unittest.main()

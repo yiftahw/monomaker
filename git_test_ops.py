@@ -46,6 +46,9 @@ def add_submodule(repo: str, submodule_url: str, path_relative_to_repo: str):
     exec_cmd(f"git submodule add {submodule_url} {path_relative_to_repo}", cwd=repo)
     exec_cmd("git commit -m 'Add submodule'", cwd=repo)
 
+def repo_url(repo_path: str) -> str:
+    return f"file://{repo_path}"
+
 def add_local_submodule(repo_path: str, repo_branch: str, submodule_path: str, path_relative_to_repo: str, branch: str = "main"):
     """
     :param repo: root to repository that will track the submodule
@@ -60,7 +63,7 @@ def add_local_submodule(repo_path: str, repo_branch: str, submodule_path: str, p
     :type branch: str
     """
     switch_branch(repo_path, repo_branch)
-    cmd = f"git submodule add file://{submodule_path} {path_relative_to_repo}"
+    cmd = f"git submodule add {repo_url(submodule_path)} {path_relative_to_repo}"
     exec_cmd(cmd, cwd=repo_path)
     submodule_path = os.path.join(repo_path, path_relative_to_repo)
     switch_branch(submodule_path, branch)
