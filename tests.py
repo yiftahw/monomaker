@@ -192,25 +192,6 @@ class TestGitOps(unittest.TestCase):
             self.assertTrue(submodule_files.issubset(imported_files), f"Expected files {submodule_files} not all found in imported files {imported_files} for branch {branch.name}, expected branches: {expected_branches}")
             for file in branch.files:
                 self.assertTrue(self.check_file_content(os.path.join(monorepo_path, submodule_relative_path), file.filename, file.content))
-    
-    def assertNestedSubmoduleTracking(self, monorepo_default_branch: str):
-        # verify nested submodule is tracked correctly in the monorepo
-        # <root>/submodule_a/nested_submodule default branch should be a direct submodule of the monorepo default branch
-        
-        # verify we are tracking exactly 1 nested submodule
-        git_test_ops.switch_branch(self.monorepo_path, monorepo_default_branch)
-        submodules_in_monorepo = merger.get_all_submodules(self.monorepo_path)
-        self.assertEqual(1, len(submodules_in_monorepo))
-        nested_submodule_in_monorepo = submodules_in_monorepo[0]
-        
-        expected_path = os.path.join(self.submodule_relative_path, self.nested_submodule_relative_path)
-        self.assertEqual(nested_submodule_in_monorepo.path, expected_path)
-        
-        original_commit_hash = git_test_ops.get_commit_hash(self.nested_submodule_path, self.nested_submodule_content.default_branch)
-        current_commit_hash = git_test_ops.get_submodule_commit_hash(self.monorepo_path, expected_path)
-        imported_commit_hash = nested_submodule_in_monorepo.commit_hash
-        self.assertEqual(original_commit_hash, current_commit_hash)
-        self.assertEqual(original_commit_hash, imported_commit_hash)
 
     def allow_git_file_protocol(self):
         self.old_file_allow_value = exec_cmd('git config --global --get protocol.file.allow || echo ""', verbose=False).stdout.strip()
@@ -251,7 +232,7 @@ class TestGitOps(unittest.TestCase):
             self.nested_submodule_relative_path,
             "bar"
         )
-        
+
         # register the submodule in the metarepo under default branch
         git_test_ops.add_local_submodule(
             self.repo_path,
