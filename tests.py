@@ -274,6 +274,15 @@ class TestGitOps(unittest.TestCase):
         shutil.rmtree(self.nested_submodule_path)
         self.cleanup_git_file_protocol()
 
+    def test_check_file_content(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            test_file_path = os.path.join(tempdir, "test.txt")
+            with open(test_file_path, "w") as f:
+                f.write("Test content")
+            self.assertTrue(self.check_file_content(tempdir, "test.txt", "Test content"))
+            self.assertFalse(self.check_file_content(tempdir, "test.txt", "Wrong content"))
+            self.assertFalse(self.check_file_content(tempdir, "nonexistent.txt", "Test content"))
+
     def test_repo_creation(self):
         # Verify main branch files
         for branch in self.repo_content.branches:

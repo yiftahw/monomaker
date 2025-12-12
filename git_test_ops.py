@@ -27,11 +27,6 @@ def get_commit_hash(repo: str, branch: str) -> str:
     result: CmdResult = exec_cmd(f"git rev-parse {branch}", cwd=repo)
     return result.stdout.strip()
 
-def get_submodule_commit_hash(repo: str, submodule_path: str) -> str:
-    result: CmdResult = exec_cmd(f"git submodule status {submodule_path}", cwd=repo)
-    commit_hash = result.stdout.strip().split()[0].lstrip('-+')
-    return commit_hash
-
 def repo_url(repo_path: str) -> str:
     return f"file://{repo_path}"
 
