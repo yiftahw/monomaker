@@ -4,13 +4,11 @@ import unittest
 import tempfile
 import shutil
 import os
-from pprint import pprint, PrettyPrinter
-import io
-import json
 
 from utils import exec_cmd, listdir_list, pretty_print_list, header_string
 import git_test_ops
 from models.repository import FileContent, BranchContent, RepoContent
+from models.migration_report import MigrationReport, MigrationImportInfo, SubmoduleImportInfo, SubmoduleImportInfoEntry
 import merger
 
 with open("debug.log", "w") as f:
@@ -328,9 +326,10 @@ class TestGitOps(unittest.TestCase):
             metarepo_default_branch=merger.get_head_branch(self.repo_path),
             metarepo_branches=merger.get_all_branches(self.repo_path)
         )
-        report = merger.main_flow(params)
+        report_info = merger.main_flow(params)
         print(header_string("Migration Report from main_flow"))
-        print(report)
+        parsed_report = MigrationReport(report_info)
+        print(parsed_report)
 
         # checks to see import was successful
         # "feature" branch should exist in the monorepo (it exists in the metarepo)
@@ -355,13 +354,13 @@ class TestGitOps(unittest.TestCase):
         # "bar" branch in metarepo tracks "bar" branch in submodule
         # (case 2 variant, different nested submodule commit hash)
         expected_submodule_report.add_entry("bar", "bar", "bar", expected_nested_submodule_bar_tracking)
-        expected_migration_report = merger.MigrationReport()
+        expected_migration_report = merger.MigrationImportInfo()
         expected_migration_report.add_submodule_entry(self.submodule_relative_path, expected_submodule_report)
-        self.assertEqual(report, expected_migration_report)
+        self.assertEqual(report_info, expected_migration_report)
 
         # verify file contents in each monorepo branch that imported stuff from the submodule
         submodule_expected_branches = set(["main", "dev", "bar"])
-        for submodule in report.submodules_info.keys():
+        for submodule in report_info.submodules_info.keys():
             self.assertSubmoduleImport(self.monorepo_path, submodule, submodule_expected_branches, self.submodule_a_content)
             
 if __name__ == "__main__":

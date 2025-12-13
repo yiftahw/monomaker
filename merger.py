@@ -8,7 +8,7 @@ from typing import List, Mapping, Optional, Set
 from dataclasses import dataclass
 
 from models.repository import SubmoduleDef
-from models.migration_report import MigrationReport, SubmoduleImportInfo
+from models.migration_report import MigrationImportInfo, SubmoduleImportInfo
 from utils import exec_cmd, header_string
 
 # Configurable paths
@@ -339,8 +339,8 @@ def prepare_workspace(metarepo_url: str, monorepo_url: Optional[str] = None):
     )
 
 
-def main_flow(params: WorkspaceMetadata) -> MigrationReport:
-    report = MigrationReport()
+def main_flow(params: WorkspaceMetadata) -> MigrationImportInfo:
+    report = MigrationImportInfo()
 
     # destructure params
     monorepo_root_dir = params.monorepo_root_dir
