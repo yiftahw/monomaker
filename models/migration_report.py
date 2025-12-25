@@ -73,9 +73,13 @@ class SubmoduleImportInfo:
 
 class MigrationImportInfo:
     submodules_info: Mapping[str, SubmoduleImportInfo]
+    metarepo_name: str
+    monorepo_name: str
     
-    def __init__(self):
+    def __init__(self, metarepo_name: str = "metarepo", monorepo_name: str = "monorepo"):
         self.submodules_info = dict()
+        self.metarepo_name = metarepo_name
+        self.monorepo_name = monorepo_name
     
     def add_submodule_entry(self, submodule_relative_path: str, info: SubmoduleImportInfo):
         self.submodules_info[submodule_relative_path] = info
@@ -120,9 +124,12 @@ class MigrationReportEntry:
 
 class MigrationReport:
     monorepo_branches: Mapping[BranchName, MigrationReportEntry] = dict()
-    
+    metarepo_name: str
+    monorepo_name: str
     def __init__(self, report_info: MigrationImportInfo):
         self.entries = []
+        self.metarepo_name = report_info.metarepo_name
+        self.monorepo_name = report_info.monorepo_name
         for submodule_relative_path, submodule_info in report_info.submodules_info.items():
             for entry in submodule_info.entries:
                 monorepo_branch = entry.monorepo_branch
@@ -152,12 +159,12 @@ class MigrationReport:
     def __str__(self):
         s = "Migration Report:\n"
         for monorepo_branch, entry in self.monorepo_branches.items():
-            s += f"\nMonorepo branch: {monorepo_branch}\n"
+            s += f"\n{self.monorepo_name} branch: {monorepo_branch}\n"
             s += f"  Imported branches:\n"
-            s += f"  - metarepo: {entry.metarepo_branch}\n"
+            s += f"  - {self.metarepo_name}: {entry.metarepo_branch}\n"
             for submodule_path, submodule_branch in entry.imported_submodules.items():
                 s += f"  - {submodule_path}: {submodule_branch}\n"
-            s += f"  Tracked nested submodules:\n" if len(entry.tracked_nested_submodules) > 0 else ""
+            s += f"  Tracked git submodules:\n" if len(entry.tracked_nested_submodules) > 0 else ""
             for nested_path, tracking_info in entry.tracked_nested_submodules.items():
                 s += f"  - {nested_path}: url={tracking_info.url}, commit={tracking_info.commit_hash}\n"
         return s
