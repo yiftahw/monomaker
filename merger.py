@@ -182,6 +182,9 @@ def import_submodule(monorepo_root_dir: str,
         if metarepo_tracked_branches is not None:
             branches_closure.update(metarepo_tracked_branches)
 
+        monorepo_branches = set(get_all_branches(monorepo_root_dir))
+        print(f"Found {monorepo_name} branches while importing submodule {submodule_path}:\n")
+        print("\n".join(monorepo_branches))
         branches_to_skip = set()
 
         # Pre-create all needed branches that don't exist in metarepo yet
@@ -208,12 +211,13 @@ def import_submodule(monorepo_root_dir: str,
                 continue
             
             # Create the branch if it doesn't exist
-            if not branch_exists_in_metarepo:
+            # need to make sure it was not already created in the monorepo (in a previous submodule import)
+            if branch not in monorepo_branches:
                 exec_cmd(f"git switch {metarepo_default_branch}", cwd=monorepo_root_dir)
                 exec_cmd(f"git switch -c {branch}", cwd=monorepo_root_dir)
                 print(f"Pre-created {monorepo_name} branch {branch} from {metarepo_name} default branch {metarepo_default_branch}.")
-                # Update metarepo_branches to reflect the newly created branch
-                metarepo_branches.add(branch)
+                # Update monorepo_branches to reflect the newly created branch
+                monorepo_branches.add(branch)
         
         # Switch back to default branch after pre-creating branches
         exec_cmd(f"git switch {metarepo_default_branch}", cwd=monorepo_root_dir)
@@ -246,8 +250,8 @@ def import_submodule(monorepo_root_dir: str,
             # prepare monorepo branch
             # Switch to the branch (it should exist now, either from metarepo or pre-created above)
             # Verify the branch exists - if not, it's a logic error
-            if branch not in metarepo_branches:
-                raise RuntimeError(f"Logic error: branch {branch} should exist in {monorepo_name} after preparation loop, but it doesn't. metarepo_branches: {metarepo_branches}")
+            if branch not in monorepo_branches:
+                raise RuntimeError(f"Logic error: branch {branch} should exist in {monorepo_name} after preparation loop, but it doesn't. monorepo_branches: {monorepo_branches}")
             metarepo_branch_used = branch
             exec_cmd(f"git switch {branch}", cwd=monorepo_root_dir)
             print(header_string(f"[{idx+1}/{num_branches}] Importing {submodule_path}:{branch_to_import} to {monorepo_name}:{branch}"))
