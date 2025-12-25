@@ -116,8 +116,9 @@ def import_meta_repo(monorepo_root_dir: str, metarepo_root_dir: str):
     print(f"{metarepo_name} branches: {metarepo_branches}")
     exec_cmd(f"git remote add metarepo {metarepo_root_dir}", cwd=monorepo_root_dir)
     exec_cmd(f"git fetch metarepo '+refs/heads/*:refs/remotes/metarepo/*'", cwd=monorepo_root_dir)
-    for branch in metarepo_branches:
-        print(f"=== Importing {metarepo_name}:{branch} ===")
+    num_branches = len(metarepo_branches)
+    for idx, branch in enumerate(metarepo_branches):
+        print(f"=== [{idx+1}/{num_branches}] Importing {metarepo_name}:{branch} ===")
         # ensure monorepo exists and branch created/overwritten to exactly meta branch
         exec_cmd(f"git checkout -B {branch} metarepo/{branch}", cwd=monorepo_root_dir)
     # cleanup
@@ -130,7 +131,9 @@ def update_all_repo_branches(repo_root_dir: str):
     """
     branches = get_all_branches(repo_root_dir)
     print(f"Updating all branches in repo at {repo_root_dir}: {branches}")
-    for branch in branches:
+    num_branches = len(branches)
+    for idx, branch in enumerate(branches):
+        print(f"=== [{idx+1}/{num_branches}] Updating branch {branch} ===")
         exec_cmd(f"git checkout {branch}", cwd=repo_root_dir)
         exec_cmd(f"git pull origin {branch}", cwd=repo_root_dir)
     return branches
@@ -179,7 +182,44 @@ def import_submodule(monorepo_root_dir: str,
         if metarepo_tracked_branches is not None:
             branches_closure.update(metarepo_tracked_branches)
 
+        branches_to_skip = set()
+
+        # Pre-create all needed branches that don't exist in metarepo yet
+        # This ensures that if multiple feature branches need to be created (case 4 below),
+        # they all branch from the clean metarepo default branch, not from a branch
+        # that already has submodule content imported into it
+        # TODO: create a unit-test for this scenario?
         for branch in branches_closure:
+            branch_exists_in_metarepo = branch in metarepo_branches
+            metarepo_default_branch_tracks_submodule = (metarepo_tracked_branches is not None and metarepo_default_branch in metarepo_tracked_branches)
+            submodule_not_tracked_in_metarepo_branch = metarepo_tracked_branches is not None and branch not in metarepo_tracked_branches
+            
+            # Skip if this branch doesn't need to be processed
+            if (branch_exists_in_metarepo and submodule_not_tracked_in_metarepo_branch) or (not branch_exists_in_metarepo and not metarepo_default_branch_tracks_submodule):
+                branches_to_skip.add(branch)
+                print(f"Skipping import of submodule {submodule_path} branch {branch} into {monorepo_name}, as {metarepo_name} branch does not track this submodule.")
+                print(f"Details:")
+                print(f"branch_exists_in_metarepo:                {branch_exists_in_metarepo}")
+                print(f"submodule_not_tracked_in_metarepo_branch: {submodule_not_tracked_in_metarepo_branch}")
+                print(f"metarepo_default_branch_tracks_submodule: {metarepo_default_branch_tracks_submodule}")
+                print(f"")
+                print(f"metarepo_tracked_branches: {metarepo_tracked_branches}")
+                print(f"metarepo default_branch: {metarepo_default_branch}")
+                continue
+            
+            # Create the branch if it doesn't exist
+            if not branch_exists_in_metarepo:
+                exec_cmd(f"git switch {metarepo_default_branch}", cwd=monorepo_root_dir)
+                exec_cmd(f"git switch -c {branch}", cwd=monorepo_root_dir)
+                print(f"Pre-created {monorepo_name} branch {branch} from {metarepo_name} default branch {metarepo_default_branch}.")
+                # Update metarepo_branches to reflect the newly created branch
+                metarepo_branches.add(branch)
+        
+        # Switch back to default branch after pre-creating branches
+        exec_cmd(f"git switch {metarepo_default_branch}", cwd=monorepo_root_dir)
+
+        num_branches = len(branches_closure)
+        for idx, branch in enumerate(branches_closure):
             # for each {metarepo/branch}, if:
             # 1. branch exists in metarepo but doesn't track submodule -> skip importing submodule branch into it
             # 2. branch exists in metarepo, exists in submodule        -> import submodule branch into it (if submodule is tracked in the metarepo branch)
@@ -190,19 +230,8 @@ def import_submodule(monorepo_root_dir: str,
             # so the default branch should exist fully in the monorepo, and it is safe to branch out from it.
 
             # case 1: branch exists in metarepo but doesn't track submodule, or doesn't exist and default branch doesn't track it either
-            #         -> skip importing submodule branch into it
-            metarepo_default_branch_tracks_submodule = (metarepo_tracked_branches is not None and metarepo_default_branch in metarepo_tracked_branches)
-            branch_exists_in_metarepo = branch in metarepo_branches
-            submodule_not_tracked_in_metarepo_branch = metarepo_tracked_branches is not None and branch not in metarepo_tracked_branches
-            if (branch_exists_in_metarepo and submodule_not_tracked_in_metarepo_branch) or (not branch_exists_in_metarepo and not metarepo_default_branch_tracks_submodule):
-                print(f"Skipping import of submodule {submodule_path} branch {branch} into {monorepo_name}, as {metarepo_name} branch does not track this submodule.")
-                print(f"Details:")
-                print(f"branch_exists_in_metarepo:                {branch_exists_in_metarepo}")
-                print(f"submodule_not_tracked_in_metarepo_branch: {submodule_not_tracked_in_metarepo_branch}")
-                print(f"metarepo_default_branch_tracks_submodule: {metarepo_default_branch_tracks_submodule}")
-                print(f"")
-                print(f"metarepo_tracked_branches: {metarepo_tracked_branches}")
-                print(f"metarepo default_branch: {metarepo_default_branch}")
+            #         -> skip importing submodule branch into it (we can't retest this logic as we pre-created needed branches above)
+            if (branch in branches_to_skip):
                 continue
 
             # if some submodule doesn't contain a feature branch that DOES exist in the metarepo,
@@ -215,18 +244,13 @@ def import_submodule(monorepo_root_dir: str,
                 branch_to_import = submodule_default_branch
 
             # prepare monorepo branch
+            # Switch to the branch (it should exist now, either from metarepo or pre-created above)
+            # Verify the branch exists - if not, it's a logic error
+            if branch not in metarepo_branches:
+                raise RuntimeError(f"Logic error: branch {branch} should exist in {monorepo_name} after preparation loop, but it doesn't. metarepo_branches: {metarepo_branches}")
             metarepo_branch_used = branch
-            if not branch_exists_in_metarepo:
-                # first switch to the default branch
-                exec_cmd(f"git switch {metarepo_default_branch}", cwd=monorepo_root_dir)
-                # then create the new branch from it
-                exec_cmd(f"git switch -c {branch}", cwd=monorepo_root_dir)
-                print(f"Created new {monorepo_name} branch {branch} from {metarepo_name} default branch {metarepo_default_branch} to import submodule into it.")
-                metarepo_branch_used = metarepo_default_branch
-            else:
-                # branch exists in metarepo, so we should switch to it
-                exec_cmd(f"git switch {branch}", cwd=monorepo_root_dir)
-            print(header_string(f"Importing {submodule_path}:{branch_to_import} to {monorepo_name}:{branch}"))
+            exec_cmd(f"git switch {branch}", cwd=monorepo_root_dir)
+            print(header_string(f"[{idx+1}/{num_branches}] Importing {submodule_path}:{branch_to_import} to {monorepo_name}:{branch}"))
 
             # prepare submodule branch clone (isolated workspace, git-filter-repo modifies its git history)
             branch_clone_dir_name = f"clone_{branch_to_import.replace('/', '_')}"
@@ -395,7 +419,7 @@ def main_flow(params: WorkspaceMetadata) -> MigrationImportInfo:
     
     # for each submodule, we will do a fresh clone, and then process it
     for submodule in metarepo_tracked_submodules_mapping:
-        submodule_report = import_submodule(monorepo_root_dir, submodule.url, submodule.path, metarepo_default_branch, metarepo_branches, expected_branches=None, metarepo_tracked_branches=metarepo_tracked_submodules_mapping[submodule])
+        submodule_report = import_submodule(monorepo_root_dir, submodule.url, submodule.path, metarepo_default_branch, set(metarepo_branches), expected_branches=None, metarepo_tracked_branches=metarepo_tracked_submodules_mapping[submodule])
         report.add_submodule_entry(submodule.path, submodule_report)
 
     print(header_string("Merge Complete"))
