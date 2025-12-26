@@ -11,6 +11,7 @@ from models.repository import SubmoduleDef
 from models.migration_report import MigrationImportInfo, SubmoduleImportInfo
 from utils import exec_cmd, header_string
 import sys
+import json
 
 # Configurable paths
 THIS_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -348,6 +349,8 @@ class WorkspaceMetadata:
     metarepo_root_dir: str
     metarepo_default_branch: str
     metarepo_branches: List[str]
+    dump_template: bool = False
+    template_path: Optional[str] = None
 
 def extract_repo_name_from_url(repo_url: str, default: str) -> str:
     default_is_bad = default is None or len(default) == 0
@@ -398,6 +401,13 @@ def prepare_workspace(metarepo_url: str, monorepo_url: Optional[str] = None):
         metarepo_branches=metarepo_branches
     )
 
+@dataclass
+class MigrationStrategyEntry:
+    url: str
+    consume_branches: bool
+@dataclass
+class MigrationStrategy:
+    submodule_strategies: Mapping[str, MigrationStrategyEntry]
 
 def main_flow(params: WorkspaceMetadata) -> MigrationImportInfo:
     global monorepo_name, metarepo_name
@@ -417,12 +427,49 @@ def main_flow(params: WorkspaceMetadata) -> MigrationImportInfo:
     # for each submodule, we will bookkeep which metarepo branches track it.
     metarepo_tracked_submodules_mapping = get_metarepo_tracked_submodules_mapping(metarepo_root_dir)
 
+    if params.dump_template:
+        output = dict()
+        for submodule in metarepo_tracked_submodules_mapping:
+            output[submodule.path] = {
+                "url": submodule.url,
+                "consume_branches": True
+            }
+        template_json = json.dumps(output, indent=4)
+        template_path = params.template_path if params.template_path is not None else os.path.join(os.getcwd(), "migration_strategy.json")
+        with open(template_path, "w") as f:
+            f.write(template_json)
+        print(f"Dumped migration strategy template to {template_path}. Exiting.")
+        sys.exit(0)
+
+    migration_strategy = MigrationStrategy(dict())
+    if params.template_path is not None:
+        print(f"Loading migration strategy from {params.template_path} ...")
+        with open(params.template_path, "r") as f:
+            strategy_json = f.read()
+        strategy_dict: dict = json.loads(strategy_json)
+        for submodule_path, entry_dict in strategy_dict.items():
+            migration_strategy.submodule_strategies[submodule_path] = MigrationStrategyEntry(
+                url=entry_dict["url"],
+                consume_branches=entry_dict["consume_branches"]
+            )
+
+    def should_consume_submodule_branches(submodule: SubmoduleDef) -> bool:
+        # if migration strategy doesn't contain submodule, assume happy path: consume all branches
+        entry = migration_strategy.submodule_strategies.get(submodule.path)
+        return entry is None or entry.consume_branches and entry.url == submodule.url
+
     print(f"Submodules to import:")
     for submodule in metarepo_tracked_submodules_mapping:
-        print(f"path: {submodule.path}\nurl: {submodule.url}\n")
+        print(f"path: {submodule.path}\nurl: {submodule.url}")
+        if not should_consume_submodule_branches(submodule):
+            print(f"  (will NOT consume branches from metarepo for this submodule, as per strategy)")
+        print("")
     
     # for each submodule, we will do a fresh clone, and then process it
     for submodule in metarepo_tracked_submodules_mapping:
+        if not should_consume_submodule_branches(submodule):
+            print(f"Skipping import of submodule {submodule.path} as per migration strategy.")
+            continue
         submodule_report = import_submodule(monorepo_root_dir, submodule.url, submodule.path, metarepo_default_branch, set(metarepo_branches), expected_branches=None, metarepo_tracked_branches=metarepo_tracked_submodules_mapping[submodule])
         report.add_submodule_entry(submodule.path, submodule_report)
 
@@ -463,7 +510,21 @@ def main():
         "--dump-txt",
         dest="dump_txt",
         action="store_true",
-        help="If set, dumps the migration report to a text file."
+        help="If set, saves the log output to a file named 'migration_report.txt' in the script directory."
+    )
+    parser.add_argument(
+        "--dump-template",
+        default=False,
+        dest="dump_template",
+        action="store_true",
+        help="If set, dumps a strategy template file and exits."
+    )
+    parser.add_argument(
+        "--template-path",
+        dest="template_path",
+        type=str,
+        default=None,
+        help="Path to save the strategy template file. If not provided, defaults to the current directory."
     )
     args = parser.parse_args()
     if args.dump_txt:
@@ -475,6 +536,8 @@ def main():
         sys.stderr = Tee(sys.stderr, log_file)
     print("start time:", time.ctime())
     workspace_params = prepare_workspace(args.metarepo_url, args.monorepo_url)
+    workspace_params.dump_template = args.dump_template
+    workspace_params.template_path = args.template_path
     migration_report = main_flow(workspace_params)
     print(migration_report)
     end_time = time.monotonic()
