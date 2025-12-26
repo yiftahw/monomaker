@@ -326,15 +326,15 @@ def import_submodule(monorepo_root_dir: str,
                 else:
                     # git does not auto-stage the submodule checkout, so we need to do it manually
                     exec_cmd(f"git add {nested_submodule_relative_path_in_monorepo}", cwd=monorepo_root_dir)
-                    # verify we actually checked out the correct commit
-                    actual_commit_hash = exec_cmd("git rev-parse HEAD", cwd=nested_submodule_abs_path).stdout.strip()
-                    if actual_commit_hash != commit_hash:
-                        raise RuntimeError(f"Logic error: after checking out commit {commit_hash} in nested submodule {nested_submodule_relative_path_in_monorepo}, actual commit is {actual_commit_hash}.")
                 exec_cmd(f"git commit -m 'Add nested submodule {nested_submodule_relative_path_in_monorepo} at commit {commit_hash}'", cwd=monorepo_root_dir)
                 # verify monorepo state is clean (nothing to commit, nothing staged)
                 status_out = exec_cmd("git status --porcelain", cwd=monorepo_root_dir).stdout.strip()
                 if status_out != "":
                     raise RuntimeError(f"After adding nested submodule {nested_submodule_relative_path_in_monorepo}, {monorepo_name} repo is not clean:\n{status_out}")
+                # after submodule is commited, verify it's commit hash with `git ls-tree`
+                ls_tree_out = exec_cmd(f"git ls-tree HEAD {nested_submodule_relative_path_in_monorepo}", cwd=monorepo_root_dir).stdout.strip().split()
+                if len(ls_tree_out) < 3 or ls_tree_out[2] != commit_hash:
+                    raise RuntimeError(f"After adding nested submodule {nested_submodule_relative_path_in_monorepo}, its commit hash in {monorepo_name} does not match expected {commit_hash}, got: {ls_tree_out}")
                 
     return report
 
