@@ -90,7 +90,7 @@ def get_all_submodules(repo_path: str) -> List[SubmoduleDef]:
         return []
     config = configparser.ConfigParser()
     config.read(gitmodules_path)
-    submodules = []
+    submodules: List[SubmoduleDef] = []
     for section in config.sections():
         if section.startswith("submodule "):
             path = config[section].get("path")
@@ -104,6 +104,9 @@ def get_all_submodules(repo_path: str) -> List[SubmoduleDef]:
                 print(f"WARNING: Cannot find commit hash for submodule at path {path}, skipping it.")
             else:
                 submodules.append(SubmoduleDef(path, url, commit_hash))
+    # print found submodules and their commit hashes, urls
+    for submodule in submodules:
+        print(f"Found submodule: path={submodule.path}, url={submodule.url}, commit={submodule.commit_hash}")
     return submodules
 
 
@@ -315,17 +318,23 @@ def import_submodule(monorepo_root_dir: str,
                 commit_hash = nested_submodule.commit_hash
                 exec_cmd(f"git submodule add --force {nested_submodule.url} {nested_submodule_relative_path_in_monorepo}", cwd=monorepo_root_dir)
                 submodule_checkout_success = exec_cmd(f"git checkout {commit_hash}", cwd=nested_submodule_abs_path, allow_failure=True)
-                if not submodule_checkout_success.returncode == 0:
+                if submodule_checkout_success.returncode != 0:
                     # grab actual commit hash from the submodule clone
                     new_commit_hash = exec_cmd("git rev-parse HEAD", cwd=nested_submodule_abs_path).stdout.strip()
                     print(f"Warning: cannot checkout commit {commit_hash} in nested submodule {nested_submodule_relative_path_in_monorepo}, using {new_commit_hash} instead.")
                     commit_hash = new_commit_hash
                 else:
+                    # git does not auto-stage the submodule checkout, so we need to do it manually
+                    exec_cmd(f"git add {nested_submodule_relative_path_in_monorepo}", cwd=monorepo_root_dir)
                     # verify we actually checked out the correct commit
                     actual_commit_hash = exec_cmd("git rev-parse HEAD", cwd=nested_submodule_abs_path).stdout.strip()
                     if actual_commit_hash != commit_hash:
                         raise RuntimeError(f"Logic error: after checking out commit {commit_hash} in nested submodule {nested_submodule_relative_path_in_monorepo}, actual commit is {actual_commit_hash}.")
                 exec_cmd(f"git commit -m 'Add nested submodule {nested_submodule_relative_path_in_monorepo} at commit {commit_hash}'", cwd=monorepo_root_dir)
+                # verify monorepo state is clean (nothing to commit, nothing staged)
+                status_out = exec_cmd("git status --porcelain", cwd=monorepo_root_dir).stdout.strip()
+                if status_out != "":
+                    raise RuntimeError(f"After adding nested submodule {nested_submodule_relative_path_in_monorepo}, {monorepo_name} repo is not clean:\n{status_out}")
                 
     return report
 
