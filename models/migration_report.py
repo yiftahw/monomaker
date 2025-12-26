@@ -1,7 +1,7 @@
 import os
 
 from typing import List, Mapping, Optional, NewType
-from dataclasses import dataclass, astuple
+from dataclasses import dataclass, astuple, asdict
 
 from .repository import SubmoduleDef
 
@@ -111,6 +111,9 @@ class SubmoduleTrackingInfo:
     url: str
     commit_hash: str
 
+    def as_dict(self):
+        return asdict(self)
+
 @dataclass
 class MigrationReportEntry:
     """
@@ -121,6 +124,13 @@ class MigrationReportEntry:
     metarepo_branch: str
     imported_submodules: Mapping[RelativePath, BranchName]
     tracked_nested_submodules: Mapping[RelativePath, SubmoduleTrackingInfo]
+
+    def as_dict(self):
+        return {
+            "metarepo_branch": self.metarepo_branch,
+            "imported_submodules": self.imported_submodules,
+            "tracked_nested_submodules": {k: v.as_dict() for k, v in self.tracked_nested_submodules.items()}
+        }
 
 class MigrationReport:
     monorepo_branches: Mapping[BranchName, MigrationReportEntry] = dict()
@@ -168,3 +178,12 @@ class MigrationReport:
             for nested_path, tracking_info in entry.tracked_nested_submodules.items():
                 s += f"  - {nested_path}: url={tracking_info.url}, commit={tracking_info.commit_hash}\n"
         return s
+    
+    def as_dict(self):
+        return {
+            "monorepo_branches": {branch: entry.as_dict() for branch, entry in self.monorepo_branches.items()},
+            "metarepo_name": self.metarepo_name,
+            "monorepo_name": self.monorepo_name
+        }
+
+

@@ -8,7 +8,7 @@ from typing import List, Mapping, Optional, Set
 from dataclasses import dataclass
 import time
 from models.repository import SubmoduleDef
-from models.migration_report import MigrationImportInfo, SubmoduleImportInfo
+from models.migration_report import MigrationImportInfo, MigrationReport, SubmoduleImportInfo
 from utils import exec_cmd, header_string
 import sys
 import json
@@ -112,6 +112,7 @@ def import_meta_repo(monorepo_root_dir: str, metarepo_root_dir: str):
     It is expected that both folders are git repositories, and that the metarepo
     is already cloned locally.
     """
+    # we set up the metarepo as a remote of the monorepo, and we fetch all its branches.
     global metarepo_name
     metarepo_branches = get_all_branches(metarepo_root_dir)
     print(f"{metarepo_name} branches: {metarepo_branches}")
@@ -213,15 +214,16 @@ def import_submodule(monorepo_root_dir: str,
             
             # Create the branch if it doesn't exist
             # need to make sure it was not already created in the monorepo (in a previous submodule import)
+            # recurse-submodules is needed because a simple `git switch` does not change the submodule HEADs if they are different between branches
             if branch not in monorepo_branches:
-                exec_cmd(f"git switch {metarepo_default_branch}", cwd=monorepo_root_dir)
+                exec_cmd(f"git switch --recurse-submodules {metarepo_default_branch}", cwd=monorepo_root_dir)
                 exec_cmd(f"git switch -c {branch}", cwd=monorepo_root_dir)
                 print(f"Pre-created {monorepo_name} branch {branch} from {metarepo_name} default branch {metarepo_default_branch}.")
                 # Update monorepo_branches to reflect the newly created branch
                 monorepo_branches.add(branch)
         
         # Switch back to default branch after pre-creating branches
-        exec_cmd(f"git switch {metarepo_default_branch}", cwd=monorepo_root_dir)
+        exec_cmd(f"git switch --recurse-submodules {metarepo_default_branch}", cwd=monorepo_root_dir)
 
         num_branches = len(branches_closure)
         for idx, branch in enumerate(branches_closure):
@@ -254,7 +256,7 @@ def import_submodule(monorepo_root_dir: str,
             if branch not in monorepo_branches:
                 raise RuntimeError(f"Logic error: branch {branch} should exist in {monorepo_name} after preparation loop, but it doesn't. monorepo_branches: {monorepo_branches}")
             metarepo_branch_used = branch
-            exec_cmd(f"git switch {branch}", cwd=monorepo_root_dir)
+            exec_cmd(f"git switch --recurse-submodules {branch}", cwd=monorepo_root_dir)
             print(header_string(f"[{idx+1}/{num_branches}] Importing {submodule_path}:{branch_to_import} to {monorepo_name}:{branch}"))
 
             # prepare submodule branch clone (isolated workspace, git-filter-repo modifies its git history)
@@ -318,6 +320,11 @@ def import_submodule(monorepo_root_dir: str,
                     new_commit_hash = exec_cmd("git rev-parse HEAD", cwd=nested_submodule_abs_path).stdout.strip()
                     print(f"Warning: cannot checkout commit {commit_hash} in nested submodule {nested_submodule_relative_path_in_monorepo}, using {new_commit_hash} instead.")
                     commit_hash = new_commit_hash
+                else:
+                    # verify we actually checked out the correct commit
+                    actual_commit_hash = exec_cmd("git rev-parse HEAD", cwd=nested_submodule_abs_path).stdout.strip()
+                    if actual_commit_hash != commit_hash:
+                        raise RuntimeError(f"Logic error: after checking out commit {commit_hash} in nested submodule {nested_submodule_relative_path_in_monorepo}, actual commit is {actual_commit_hash}.")
                 exec_cmd(f"git commit -m 'Add nested submodule {nested_submodule_relative_path_in_monorepo} at commit {commit_hash}'", cwd=monorepo_root_dir)
                 
     return report
@@ -474,6 +481,13 @@ def main_flow(params: WorkspaceMetadata) -> MigrationImportInfo:
         report.add_submodule_entry(submodule.path, submodule_report)
 
     print(header_string("Merge Complete"))
+    migration_report = MigrationReport(report)
+    # JSON for machine-readable report
+    with open(os.path.join(THIS_SCRIPT_DIR, "migration_report.json"), "w") as f:
+        f.write(json.dumps(migration_report.as_dict(), indent=4))
+    # Human-readable report
+    with open(os.path.join(THIS_SCRIPT_DIR, "migration_report.txt"), "w") as f:
+        f.write(str(migration_report))
     return report
 
 class Tee:
@@ -507,10 +521,10 @@ def main():
         help="Optional URL of an existing monorepo to merge into. If not provided, a new empty monorepo will be created."
     )
     parser.add_argument(
-        "--dump-txt",
-        dest="dump_txt",
+        "--dump-log",
+        dest="dump_log",
         action="store_true",
-        help="If set, saves the log output to a file named 'migration_report.txt' in the script directory."
+        help="If set, saves the log output to a file named 'migration_log.txt' in the script directory."
     )
     parser.add_argument(
         "--dump-template",
@@ -527,11 +541,11 @@ def main():
         help="Path to save the strategy template file. If not provided, defaults to the current directory."
     )
     args = parser.parse_args()
-    if args.dump_txt:
+    if args.dump_log:
         # redirect stdout to a file
-        report_txt_path = os.path.join(THIS_SCRIPT_DIR, "migration_report.txt")
-        print(f"Dumping migration report to {report_txt_path} ...")
-        log_file = open(report_txt_path, "w")
+        log_txt_path = os.path.join(THIS_SCRIPT_DIR, "migration_log.txt")
+        print(f"Dumping migration log to {log_txt_path} ...")
+        log_file = open(log_txt_path, "w")
         sys.stdout = Tee(sys.stdout, log_file)
         sys.stderr = Tee(sys.stderr, log_file)
     print("start time:", time.ctime())
@@ -539,7 +553,6 @@ def main():
     workspace_params.dump_template = args.dump_template
     workspace_params.template_path = args.template_path
     migration_report = main_flow(workspace_params)
-    print(migration_report)
     end_time = time.monotonic()
     elapsed = end_time - start_time
     print(f"Total time: {elapsed:.2f} seconds ({elapsed/60:.2f} minutes)")
