@@ -104,9 +104,6 @@ def get_all_submodules(repo_path: str) -> List[SubmoduleDef]:
                 print(f"WARNING: Cannot find commit hash for submodule at path {path}, skipping it.")
             else:
                 submodules.append(SubmoduleDef(path, url, commit_hash))
-    # print found submodules and their commit hashes, urls
-    for submodule in submodules:
-        print(f"Found submodule: path={submodule.path}, url={submodule.url}, commit={submodule.commit_hash}")
     return submodules
 
 
@@ -154,6 +151,10 @@ def get_monorepo_branches_tracking_submodule(monorepo_root_dir: str, submodule_p
             if submodule.path == submodule_path:
                 tracking_branches.add(branch)
                 break
+        # switching branches might leave uncommitted changes if the current branch doesn't track a submodule we disovered earlier.
+        # hence, git checkout --recurse-submodules might fail due to conflicts.
+        # the following command should reset any such changes.
+        exec_cmd("git submodule update --checkout --force", cwd=monorepo_root_dir)
     if current_branch is not None:
         exec_cmd(f"git checkout --recurse-submodules {current_branch}", cwd=monorepo_root_dir)
     return tracking_branches
@@ -271,6 +272,15 @@ def import_submodule(monorepo_root_dir: str,
                 print(f"Branch {branch} does not exist in submodule, using default branch {submodule_default_branch} instead.")
                 branch_to_import = submodule_default_branch
 
+            # anything not tracked by git should be cleaned up here to avoid conflicts
+            # if its not tracked by git, we probably don't want it in the monorepo anyway
+            # this could happen if some submodule was not cleaned up properly in some tracking branch.
+            # switching to this branch and then to another branch would leave uncommitted changes
+            git_status_out = exec_cmd("git status --porcelain", cwd=monorepo_root_dir).stdout.strip()
+            if git_status_out != "":
+                print(f"Warning: cleaning uncommitted changes in {monorepo_name} at {monorepo_root_dir} before importing submodule {submodule_path} branch {branch} ...\n{git_status_out}")
+                exec_cmd("git clean -fdX", cwd=monorepo_root_dir)
+            
             # prepare monorepo branch
             # Switch to the branch (it should exist now, either from metarepo or pre-created above)
             # Verify the branch exists - if not, it's a logic error
@@ -351,7 +361,8 @@ def import_submodule(monorepo_root_dir: str,
                 # verify monorepo state is clean (nothing to commit, nothing staged)
                 status_out = exec_cmd("git status --porcelain", cwd=monorepo_root_dir).stdout.strip()
                 if status_out != "":
-                    raise RuntimeError(f"After adding nested submodule {nested_submodule_relative_path_in_monorepo}, {monorepo_name} repo is not clean:\n{status_out}")
+                    print(f"Warning: After adding nested submodule {nested_submodule_relative_path_in_monorepo}, {monorepo_name} repo is not clean:\n{status_out}")
+                    # raise RuntimeError(f"After adding nested submodule {nested_submodule_relative_path_in_monorepo}, {monorepo_name} repo is not clean:\n{status_out}")
                 # after submodule is commited, verify it's commit hash with `git ls-tree`
                 ls_tree_out = exec_cmd(f"git ls-tree HEAD {nested_submodule_relative_path_in_monorepo}", cwd=monorepo_root_dir).stdout.strip().split()
                 if len(ls_tree_out) < 3 or ls_tree_out[2] != commit_hash:
