@@ -166,9 +166,13 @@ class MigrationReport:
 
     def register_submodule_from_metarepo_branch(self, monorepo_branch: str, metarepo_branch: str, submodule_relative_path: str, submodule_branch: str, nested_submodules: List[SubmoduleDef]):
         # `metarepo_branch` here is used as the base of the submodule import
-        if not metarepo_branch in self.monorepo_branches:
+        if metarepo_branch not in self.monorepo_branches:
             raise ValueError(f"Monorepo branch {metarepo_branch} not registered yet in report.")
-        self.monorepo_branches[monorepo_branch] = copy.deepcopy(self.monorepo_branches[metarepo_branch])
+        
+        # create the monorepo branch entry only if was not created by a previous submodule import.
+        # i.e. there might be multiple submodules with the same "feature" branch, and "feautre" does not exist in the metarepo.
+        if monorepo_branch not in self.monorepo_branches:
+            self.monorepo_branches[monorepo_branch] = copy.deepcopy(self.monorepo_branches[metarepo_branch])
 
         # add the imported submodule
         self.monorepo_branches[monorepo_branch].imported_submodules[submodule_relative_path] = submodule_branch
