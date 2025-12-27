@@ -26,6 +26,9 @@ class SubmoduleImportInfoEntry:
     
     def __str__(self):
         return f"SubmoduleImportInfoEntry(monorepo_branch={self.monorepo_branch}, metarepo_branch={self.metarepo_branch}, submodule_branch={self.submodule_branch}, nested_submodules={self.submodule_nested_submodules})"
+    
+    def __lt__(self, other):
+        return astuple(self) < astuple(other)
 
 
 class SubmoduleImportInfo:
@@ -60,10 +63,8 @@ class SubmoduleImportInfo:
             print(f"Number of entries differ: {len(self.entries)} != {len(other.entries)}")
             return False
         # sort each list prior to comparison
-        def key_func(e: SubmoduleImportInfoEntry):
-            return (e.metarepo_branch, e.submodule_branch)
-        self.entries.sort(key=key_func)
-        other.entries.sort(key=key_func)
+        self.entries.sort()
+        other.entries.sort()
         for e1, e2 in zip(self.entries, other.entries):
             if e1 != e2:
                 print(f"Entries differ:\n{e1}\n{e2}")

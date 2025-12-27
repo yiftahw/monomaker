@@ -5,3 +5,6 @@ __pycache__/
 debug.log
 git-filter-repo
 *report.txt
+*strategy.json
+*log.txt
+*report.json

@@ -328,8 +328,7 @@ class TestGitOps(unittest.TestCase):
         )
         report_info = merger.main_flow(params)
         print(header_string("Migration Report from main_flow"))
-        parsed_report = MigrationReport(report_info)
-        print(parsed_report)
+        print(MigrationReport(report_info)) # pretty print
 
         # checks to see import was successful
         # "feature" branch should exist in the monorepo (it exists in the metarepo)
@@ -356,6 +355,10 @@ class TestGitOps(unittest.TestCase):
         expected_submodule_report.add_entry("bar", "bar", "bar", expected_nested_submodule_bar_tracking)
         expected_migration_report = merger.MigrationImportInfo()
         expected_migration_report.add_submodule_entry(self.submodule_relative_path, expected_submodule_report)
+        print(header_string("Expected Migration Report"))
+        print(MigrationReport(expected_migration_report)) # pretty print
+
+        # compare reports
         self.assertEqual(report_info, expected_migration_report)
 
         # verify file contents in each monorepo branch that imported stuff from the submodule
