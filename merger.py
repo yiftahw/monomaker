@@ -418,6 +418,8 @@ def prepare_workspace(metarepo_url: str, monorepo_url: Optional[str] = None):
         exec_cmd(f"git clone {monorepo_url} {monorepo_name}", cwd=THIS_SCRIPT_DIR)
     else:
         ensure_dir(monorepo_root_dir)
+        if os.listdir(monorepo_root_dir):
+            raise RuntimeError(f"Cannot create new empty monorepo at {monorepo_root_dir}, directory is not empty.")
         print(f"Creating a new empty repository at {monorepo_root_dir} ...")
         exec_cmd("git init --initial-branch=main", cwd=monorepo_root_dir, verbose_output=True)
 
