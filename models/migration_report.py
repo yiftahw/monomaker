@@ -1,9 +1,11 @@
 import os
+import copy
 
 from typing import List, Mapping, Optional, NewType
 from dataclasses import dataclass, astuple, asdict
 
 from .repository import SubmoduleDef
+
 
 # SubmoduleImportInfoEntry, SubmoduleImportInfo, MigrationImportInfo
 # represent data accumulated during migration for reporting purposes.
@@ -33,10 +35,12 @@ class SubmoduleImportInfoEntry:
 
 class SubmoduleImportInfo:
     submodule_relative_path: str
+    submodule_default_branch: str
     entries: List[SubmoduleImportInfoEntry]
     
-    def __init__(self, submodule_relative_path: str):
+    def __init__(self, submodule_relative_path: str, submodule_default_branch: str):
         self.submodule_relative_path = submodule_relative_path
+        self.submodule_default_branch = submodule_default_branch
         self.entries = []
     
     def add_entry(self, monorepo_branch: str, metarepo_branch: str, submodule_branch: str, nested_submodules: Optional[List[SubmoduleDef]] = None):
@@ -74,11 +78,13 @@ class SubmoduleImportInfo:
 
 class MigrationImportInfo:
     submodules_info: Mapping[str, SubmoduleImportInfo]
+    metarepo_default_branch: str
     metarepo_name: str
     monorepo_name: str
     
-    def __init__(self, metarepo_name: str = "metarepo", monorepo_name: str = "monorepo"):
+    def __init__(self, metarepo_default_branch: str, metarepo_name: str = "metarepo", monorepo_name: str = "monorepo"):
         self.submodules_info = dict()
+        self.metarepo_default_branch = metarepo_default_branch
         self.metarepo_name = metarepo_name
         self.monorepo_name = monorepo_name
     
@@ -137,35 +143,74 @@ class MigrationReport:
     monorepo_branches: Mapping[BranchName, MigrationReportEntry] = dict()
     metarepo_name: str
     monorepo_name: str
+
+    # TODO: reduce code duplication with register_submodule_from_metarepo_branch 
+    def register_submodule_import(self, monorepo_branch: str, metarepo_branch: str, submodule_relative_path: str, submodule_branch: str, nested_submodules: List[SubmoduleDef]):
+        if not monorepo_branch in self.monorepo_branches:
+            self.monorepo_branches[monorepo_branch] = MigrationReportEntry(
+                metarepo_branch=metarepo_branch,
+                imported_submodules=dict(),
+                tracked_nested_submodules=dict()
+            )
+        
+        # add the imported submodule
+        self.monorepo_branches[monorepo_branch].imported_submodules[submodule_relative_path] = submodule_branch
+
+        # add the tracked nested submodules
+        for nested in nested_submodules:
+            nested_relative_path = os.path.join(submodule_relative_path, nested.path)
+            self.monorepo_branches[monorepo_branch].tracked_nested_submodules[nested_relative_path] = SubmoduleTrackingInfo(
+                url=nested.url,
+                commit_hash=nested.commit_hash
+            )
+
+    def register_submodule_from_metarepo_branch(self, monorepo_branch: str, metarepo_branch: str, submodule_relative_path: str, submodule_branch: str, nested_submodules: List[SubmoduleDef]):
+        # `metarepo_branch` here is used as the base of the submodule import
+        if not metarepo_branch in self.monorepo_branches:
+            raise ValueError(f"Monorepo branch {metarepo_branch} not registered yet in report.")
+        self.monorepo_branches[monorepo_branch] = copy.deepcopy(self.monorepo_branches[metarepo_branch])
+
+        # add the imported submodule
+        self.monorepo_branches[monorepo_branch].imported_submodules[submodule_relative_path] = submodule_branch
+
+        # add the tracked nested submodules
+        for nested in nested_submodules:
+            nested_relative_path = os.path.join(submodule_relative_path, nested.path)
+            self.monorepo_branches[monorepo_branch].tracked_nested_submodules[nested_relative_path] = SubmoduleTrackingInfo(
+                url=nested.url,
+                commit_hash=nested.commit_hash
+            )
+
+
     def __init__(self, report_info: MigrationImportInfo):
         self.entries = []
         self.metarepo_name = report_info.metarepo_name
         self.monorepo_name = report_info.monorepo_name
+        metarepo_default_branch = report_info.metarepo_default_branch
+        
+        # need to first populate the metarepo default branch,
+        # as it's report might serve as the base for other branches
         for submodule_relative_path, submodule_info in report_info.submodules_info.items():
             for entry in submodule_info.entries:
-                monorepo_branch = entry.monorepo_branch
-                metarepo_branch = entry.metarepo_branch
-                submodule_branch = entry.submodule_branch
-                nested_submodules = entry.submodule_nested_submodules
+                is_metarepo_default_branch = entry.metarepo_branch == metarepo_default_branch
+                is_submodule_branch_same_or_default = entry.submodule_branch in [metarepo_default_branch, submodule_info.submodule_default_branch]
+                if is_metarepo_default_branch and is_submodule_branch_same_or_default:
+                    self.register_submodule_import(entry.monorepo_branch, entry.metarepo_branch, submodule_relative_path, entry.submodule_branch, entry.submodule_nested_submodules)
 
-                # add to the appropriate monorepo branch entry
-                if not monorepo_branch in self.monorepo_branches:
-                    self.monorepo_branches[monorepo_branch] = MigrationReportEntry(
-                        metarepo_branch=metarepo_branch,
-                        imported_submodules=dict(),
-                        tracked_nested_submodules=dict()
-                    )
-                
-                # add the imported submodule
-                self.monorepo_branches[monorepo_branch].imported_submodules[submodule_relative_path] = submodule_branch
-
-                # add the tracked nested submodules
-                for nested in nested_submodules:
-                    nested_relative_path = os.path.join(submodule_relative_path, nested.path)
-                    self.monorepo_branches[monorepo_branch].tracked_nested_submodules[nested_relative_path] = SubmoduleTrackingInfo(
-                        url=nested.url,
-                        commit_hash=nested.commit_hash
-                    )
+        # now populate all other branches
+        for submodule_relative_path, submodule_info in report_info.submodules_info.items():
+            for entry in submodule_info.entries:
+                    # need to decide if this submodule feature branch needs to be registered from the metarepo default branch
+                    is_metarepo_default_branch = entry.metarepo_branch == metarepo_default_branch
+                    is_submodule_branch_same_or_default = entry.submodule_branch in [metarepo_default_branch, submodule_info.submodule_default_branch]
+                    if is_metarepo_default_branch:
+                        if is_submodule_branch_same_or_default:
+                            # already registered in the first pass
+                            continue
+                        else:
+                            self.register_submodule_from_metarepo_branch(entry.monorepo_branch, metarepo_default_branch, submodule_relative_path, entry.submodule_branch, entry.submodule_nested_submodules)
+                    else:
+                        self.register_submodule_import(entry.monorepo_branch, entry.metarepo_branch, submodule_relative_path, entry.submodule_branch, entry.submodule_nested_submodules)
                 
     def __str__(self):
         s = "Migration Report:\n"

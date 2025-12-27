@@ -172,7 +172,6 @@ def import_submodule(monorepo_root_dir: str,
     metarepo_branches_tracking_submodule: is only used for bookkeeping/reporting purposes, to know which metarepo branches actually tracked this submodule.
     """
     global monorepo_name, metarepo_name
-    report = SubmoduleImportInfo(submodule_path)
     with tempfile.TemporaryDirectory() as tempdir:
         # First, make a minimal clone just to get branch information
         info_clone_dir = os.path.join(tempdir, "info_clone")
@@ -182,6 +181,7 @@ def import_submodule(monorepo_root_dir: str,
 
         # Get the default branch (after cloning, HEAD points to the default branch)
         submodule_default_branch = get_head_branch(info_clone_dir)
+        report = SubmoduleImportInfo(submodule_path, submodule_default_branch)
 
         # Get all branches from the fresh clone
         submodule_branches = set(get_all_branches(info_clone_dir))
@@ -204,7 +204,7 @@ def import_submodule(monorepo_root_dir: str,
         monorepo_branches_tracking_submodule: Set[str] = get_monorepo_branches_tracking_submodule(monorepo_root_dir, submodule_path)
         print(f"Found {len(monorepo_branches_tracking_submodule)} {monorepo_name} branches that actually track the submodule {submodule_path}:\n")
 
-        # branches_clusure: all branches that need to be considered for this submodule
+        # branches_closure: all branches that need to be considered for this submodule
         # see comments below for details
         branches_closure = monorepo_branches.union(submodule_branches)
 
@@ -288,7 +288,7 @@ def import_submodule(monorepo_root_dir: str,
             # Record in report
             metarepo_branch_used = branch
             if metarepo_branches_tracking_submodule is not None and branch not in metarepo_branches_tracking_submodule:
-                # if we are here, we are actually importing this submodule branch, so it's probably due to case 4 above
+                # case 4: submodule feature branch with the metarepo's default branch
                 metarepo_branch_used = metarepo_default_branch
             nested_submodules = get_all_submodules(branch_clone_dir)
             report.add_entry(branch, metarepo_branch_used, branch_to_import, nested_submodules)
@@ -356,8 +356,7 @@ def import_submodule(monorepo_root_dir: str,
                 ls_tree_out = exec_cmd(f"git ls-tree HEAD {nested_submodule_relative_path_in_monorepo}", cwd=monorepo_root_dir).stdout.strip().split()
                 if len(ls_tree_out) < 3 or ls_tree_out[2] != commit_hash:
                     raise RuntimeError(f"After adding nested submodule {nested_submodule_relative_path_in_monorepo}, its commit hash in {monorepo_name} does not match expected {commit_hash}, got: {ls_tree_out}")
-                
-    return report
+        return report
 
 def get_metarepo_tracked_submodules_mapping(repo_path: str) -> Mapping[SubmoduleDef, Set[str]]:
     """
@@ -447,14 +446,14 @@ class MigrationStrategy:
     submodule_strategies: Mapping[str, MigrationStrategyEntry]
 
 def main_flow(params: WorkspaceMetadata) -> MigrationImportInfo:
-    global monorepo_name, metarepo_name
-    report = MigrationImportInfo(metarepo_name, monorepo_name)
-
     # destructure params
     monorepo_root_dir = params.monorepo_root_dir
     metarepo_root_dir = params.metarepo_root_dir
     metarepo_default_branch = params.metarepo_default_branch
     metarepo_branches = params.metarepo_branches
+
+    global monorepo_name, metarepo_name
+    report = MigrationImportInfo(metarepo_default_branch, metarepo_name, monorepo_name)
 
     # Import metarepo
     import_meta_repo(monorepo_root_dir, metarepo_root_dir)

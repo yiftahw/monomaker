@@ -341,7 +341,7 @@ class TestGitOps(unittest.TestCase):
         # verify we imported the submodule branches correctly, and we track the nested submodules correctly
         expected_nested_submodule_default_tracking = [merger.SubmoduleDef(self.nested_submodule_relative_path, self.nested_submodule_url, self.nested_submodule_default_branch_commit_hash)]
         expected_nested_submodule_bar_tracking = [merger.SubmoduleDef(self.nested_submodule_relative_path, self.nested_submodule_url, self.nested_submodule_bar_branch_commit_hash)]
-        expected_submodule_report = merger.SubmoduleImportInfo(self.submodule_relative_path)
+        expected_submodule_report = merger.SubmoduleImportInfo(self.submodule_relative_path, self.submodule_a_content.default_branch)
         # case 2: created "main" in monorepo from metarepo "main" and submodule "main"
         # submodule_a default branch "main" tracks nested_submodule default "main"
         expected_submodule_report.add_entry("main", "main", "main", expected_nested_submodule_default_tracking)
@@ -353,7 +353,7 @@ class TestGitOps(unittest.TestCase):
         # "bar" branch in metarepo tracks "bar" branch in submodule
         # (case 2 variant, different nested submodule commit hash)
         expected_submodule_report.add_entry("bar", "bar", "bar", expected_nested_submodule_bar_tracking)
-        expected_migration_report = merger.MigrationImportInfo()
+        expected_migration_report = merger.MigrationImportInfo(self.repo_content.default_branch)
         expected_migration_report.add_submodule_entry(self.submodule_relative_path, expected_submodule_report)
         print(header_string("Expected Migration Report"))
         print(MigrationReport(expected_migration_report)) # pretty print
