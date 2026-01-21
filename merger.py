@@ -139,7 +139,7 @@ def import_meta_repo(monorepo_root_dir: str, metarepo_root_dir: str):
         # breadcrumb: commit message to indicate the first bookkeeping commit.
         commit_hash = get_head_commit(monorepo_root_dir)
         metarepo_branch_commits[branch] = commit_hash
-        exec_cmd(f"git commit --allow-empty -m '{MONOMAKER_PREFIX} import `{metarepo_name}` branch `{branch}` at commit {commit_hash}'", cwd=monorepo_root_dir)
+        exec_cmd(f"git commit --allow-empty -m '{MONOMAKER_PREFIX} checkout `{metarepo_name}` branch `{branch}` at commit {commit_hash}'", cwd=monorepo_root_dir)
     # cleanup
     exec_cmd(f"git remote remove metarepo", cwd=monorepo_root_dir)
     return metarepo_branch_commits
@@ -333,7 +333,7 @@ def import_submodule(monorepo_root_dir: str,
             if os.path.exists(submodule_full_path_in_monorepo):
                 print(f"Removing existing files in {monorepo_name} at {submodule_full_path_in_monorepo} ...")
                 exec_cmd(f"git rm -rf {submodule_path}", cwd=monorepo_root_dir)
-                exec_cmd(f"git commit -m '{MONOMAKER_PREFIX} remove submodule `{submodule_path}` before merging to `{monorepo_name}`'", cwd=monorepo_root_dir)
+                exec_cmd(f"git commit -m '{MONOMAKER_PREFIX} remove submodule `{submodule_path}` from `{monorepo_name}`'", cwd=monorepo_root_dir)
             else:
                 print(f"No existing files to remove in {monorepo_name} at {submodule_full_path_in_monorepo}.")
 
@@ -343,7 +343,7 @@ def import_submodule(monorepo_root_dir: str,
             
             exec_cmd(f"git remote add {remote_name} {branch_clone_abs}", cwd=monorepo_root_dir)
             exec_cmd(f"git fetch {remote_name}", cwd=monorepo_root_dir)
-            exec_cmd(f"git merge {remote_name}/{branch_to_import} --allow-unrelated-histories -m '{MONOMAKER_PREFIX} merge submodule `{submodule_path}` branch `{branch_to_import}` at commit {submodule_branch_commit_hash} to `{monorepo_name}` branch `{branch}`'", cwd=monorepo_root_dir)
+            exec_cmd(f"git merge {remote_name}/{branch_to_import} --allow-unrelated-histories -m '{MONOMAKER_PREFIX} merge submodule `{submodule_path}` branch `{branch_to_import}` at commit {submodule_branch_commit_hash}'", cwd=monorepo_root_dir)
             
             # Cleanup remote (the clone directory will be cleaned up by tempdir)
             exec_cmd(f"git remote remove {remote_name}", cwd=monorepo_root_dir)
@@ -365,7 +365,7 @@ def import_submodule(monorepo_root_dir: str,
                 if nested_submodule_exists:
                     print(f"Removing nested submodule files at {nested_submodule_abs_path} ...")
                     exec_cmd(f"git rm -rf {nested_submodule_relative_path_in_monorepo}", cwd=monorepo_root_dir)
-                    exec_cmd(f"git commit -m '{MONOMAKER_PREFIX} remove nested submodule `{nested_submodule_relative_path_in_monorepo}` before re-tracking in `{monorepo_name}`'", cwd=monorepo_root_dir)
+                    exec_cmd(f"git commit -m '{MONOMAKER_PREFIX} remove submodule `{nested_submodule.path}` from `{submodule_path}`'", cwd=monorepo_root_dir)
                 # re-register nested submodule in monorepo
                 # `--force` is needed in case multiple branches contain the same nested submodule (likely)
                 commit_hash = nested_submodule.commit_hash
@@ -379,7 +379,7 @@ def import_submodule(monorepo_root_dir: str,
                 else:
                     # git does not auto-stage the submodule checkout, so we need to do it manually
                     exec_cmd(f"git add {nested_submodule_relative_path_in_monorepo}", cwd=monorepo_root_dir)
-                exec_cmd(f"git commit -m '{MONOMAKER_PREFIX} add nested submodule `{nested_submodule_relative_path_in_monorepo}` at commit {commit_hash}'", cwd=monorepo_root_dir)
+                exec_cmd(f"git commit -m '{MONOMAKER_PREFIX} add submodule `{nested_submodule_relative_path_in_monorepo}` at commit {commit_hash}'", cwd=monorepo_root_dir)
                 # verify monorepo state is clean (nothing to commit, nothing staged)
                 status_out = exec_cmd("git status --porcelain", cwd=monorepo_root_dir).stdout.strip()
                 if status_out != "":
