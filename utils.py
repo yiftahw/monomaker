@@ -9,7 +9,7 @@ class CmdResult:
     stdout: str
     stderr: str
 
-def exec_cmd(cmd: str, cwd: str = None, verbose: bool = True, verbose_output: bool = False) -> CmdResult:
+def exec_cmd(cmd: str, cwd: str = None, verbose: bool = True, verbose_output: bool = False, allow_failure: bool = False) -> CmdResult:
     """
     Execute a shell command and return the result.
     """
@@ -23,7 +23,8 @@ def exec_cmd(cmd: str, cwd: str = None, verbose: bool = True, verbose_output: bo
         print(f"Command '{cmd}' failed with return code {proc.returncode}")
         if proc.stderr:
             print(f"Error output: {proc.stderr}")            
-        raise RuntimeError(f"Command '{cmd}' failed with return code {proc.returncode}\n{proc.stderr}\n{proc.stdout}")
+        if not allow_failure:
+            raise RuntimeError(f"Command '{cmd}' failed with return code {proc.returncode}\n{proc.stderr}\n{proc.stdout}")
     return CmdResult(proc.returncode, proc.stdout, proc.stderr)
 
 
