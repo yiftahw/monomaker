@@ -323,8 +323,7 @@ class TestGitOps(unittest.TestCase):
         params = merger.WorkspaceMetadata(
             monorepo_root_dir=self.monorepo_path,
             metarepo_root_dir=self.repo_path,
-            metarepo_default_branch=merger.get_head_branch(self.repo_path),
-            metarepo_branches=merger.get_all_branches(self.repo_path)
+            metarepo_default_branch=merger.get_head_branch(self.repo_path)
         )
         report_info = merger.main_flow(params)
         print(header_string("Migration Report from main_flow"))
