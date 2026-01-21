@@ -18,6 +18,8 @@ THIS_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 GIT_FILTER_REPO = os.path.join(THIS_SCRIPT_DIR, "git-filter-repo")
 SANDBOX_DIR = os.path.join(THIS_SCRIPT_DIR, "sandbox")
 
+MONOMAKER_PREFIX = "[monomaker]"
+
 # Global variables used for logging/reporting
 metarepo_name = "metarepo"
 monorepo_name = "monorepo"
@@ -107,10 +109,19 @@ def get_all_submodules(repo_path: str) -> List[SubmoduleDef]:
     return submodules
 
 
+def get_head_commit(repo_path: str) -> str:
+    """
+    Returns the commit hash of the current HEAD in the given repo.
+    """
+    cmd = "git rev-parse HEAD"
+    out = exec_cmd(cmd, cwd=repo_path)
+    return out.stdout.strip()
+
 def import_meta_repo(monorepo_root_dir: str, metarepo_root_dir: str):
     """
     It is expected that both folders are git repositories, and that the metarepo
     is already cloned locally.
+    Returns a mapping of branch names to their metarepo commit hashes.
     """
     # we set up the metarepo as a remote of the monorepo, and we fetch all its branches.
     global metarepo_name
@@ -118,13 +129,20 @@ def import_meta_repo(monorepo_root_dir: str, metarepo_root_dir: str):
     print(f"{metarepo_name} branches: {metarepo_branches}")
     exec_cmd(f"git remote add metarepo {metarepo_root_dir}", cwd=monorepo_root_dir)
     exec_cmd(f"git fetch metarepo '+refs/heads/*:refs/remotes/metarepo/*'", cwd=monorepo_root_dir)
+    
+    metarepo_branch_commits = dict()
     num_branches = len(metarepo_branches)
     for idx, branch in enumerate(metarepo_branches):
         print(f"=== [{idx+1}/{num_branches}] Importing {metarepo_name}:{branch} ===")
         # ensure monorepo exists and branch created/overwritten to exactly meta branch
         exec_cmd(f"git checkout -B {branch} metarepo/{branch}", cwd=monorepo_root_dir)
+        # breadcrumb: commit message to indicate the first bookkeeping commit.
+        commit_hash = get_head_commit(monorepo_root_dir)
+        metarepo_branch_commits[branch] = commit_hash
+        exec_cmd(f"git commit --allow-empty -m '{MONOMAKER_PREFIX} import `{metarepo_name}` branch `{branch}` at commit {commit_hash}'", cwd=monorepo_root_dir)
     # cleanup
     exec_cmd(f"git remote remove metarepo", cwd=monorepo_root_dir)
+    return metarepo_branch_commits
 
 def update_all_repo_branches(repo_root_dir: str):
     """
@@ -163,6 +181,7 @@ def import_submodule(monorepo_root_dir: str,
                      submodule_repo_url: str,
                      submodule_path: str,
                      metarepo_default_branch: str,
+                     metarepo_branch_commits: Mapping[str, str],
                      expected_branches: Optional[Set[str]] = None) -> SubmoduleImportInfo:
     """
     It is expected that monorepo_root_dir points to a git repository where the submodule will be imported.
@@ -292,14 +311,19 @@ def import_submodule(monorepo_root_dir: str,
             branch_clone_dir = os.path.join(branches_dir, branch_clone_dir_name)
             exec_cmd(f"rm -rf {branch_clone_dir}") # might already exist if multiple metarepo branches point to same submodule branch
             exec_cmd(f"git clone -b {branch_to_import} --single-branch {submodule_repo_url} {branch_clone_dir}")
+            submodule_branch_commit_hash = get_head_commit(branch_clone_dir)
 
             # Record in report
             metarepo_branch_used = branch
             if branch not in monorepo_branches_tracking_submodule:
                 # case 4: submodule feature branch with the metarepo's default branch
                 metarepo_branch_used = metarepo_default_branch
+            
+            # Get the metarepo commit hash from the mapping (captured during import_meta_repo)
+            metarepo_commit_hash = metarepo_branch_commits[metarepo_branch_used]
+            
             nested_submodules = get_all_submodules(branch_clone_dir)
-            report.add_entry(branch, metarepo_branch_used, branch_to_import, nested_submodules)
+            report.add_entry(branch, metarepo_branch_used, metarepo_commit_hash, branch_to_import, submodule_branch_commit_hash, nested_submodules)
 
             # Run filter-repo on the isolated clone to move everything under submodule_path
             exec_cmd(f"python3 {GIT_FILTER_REPO} --force --to-subdirectory-filter {submodule_path}", cwd=branch_clone_dir)
@@ -309,7 +333,7 @@ def import_submodule(monorepo_root_dir: str,
             if os.path.exists(submodule_full_path_in_monorepo):
                 print(f"Removing existing files in {monorepo_name} at {submodule_full_path_in_monorepo} ...")
                 exec_cmd(f"git rm -rf {submodule_path}", cwd=monorepo_root_dir)
-                exec_cmd(f"git commit -m 'Remove submodule {submodule_path} before merging to {monorepo_name}'", cwd=monorepo_root_dir)
+                exec_cmd(f"git commit -m '{MONOMAKER_PREFIX} remove submodule `{submodule_path}` before merging to `{monorepo_name}`'", cwd=monorepo_root_dir)
             else:
                 print(f"No existing files to remove in {monorepo_name} at {submodule_full_path_in_monorepo}.")
 
@@ -319,7 +343,7 @@ def import_submodule(monorepo_root_dir: str,
             
             exec_cmd(f"git remote add {remote_name} {branch_clone_abs}", cwd=monorepo_root_dir)
             exec_cmd(f"git fetch {remote_name}", cwd=monorepo_root_dir)
-            exec_cmd(f"git merge {remote_name}/{branch_to_import} --allow-unrelated-histories -m 'Merge submodule {submodule_path} branch {branch_to_import} to {monorepo_name} branch {branch}'", cwd=monorepo_root_dir)
+            exec_cmd(f"git merge {remote_name}/{branch_to_import} --allow-unrelated-histories -m '{MONOMAKER_PREFIX} merge submodule `{submodule_path}` branch `{branch_to_import}` at commit {submodule_branch_commit_hash} to `{monorepo_name}` branch `{branch}`'", cwd=monorepo_root_dir)
             
             # Cleanup remote (the clone directory will be cleaned up by tempdir)
             exec_cmd(f"git remote remove {remote_name}", cwd=monorepo_root_dir)
@@ -335,13 +359,13 @@ def import_submodule(monorepo_root_dir: str,
                 if os.path.isfile(gitmodules_in_monorepo): # if we have more than one nested submodule in the same subdirectory, we only need to remove it once
                     print(f"Removing .gitmodules file for nested submodules at {gitmodules_in_monorepo} ...")
                     exec_cmd(f"git rm {os.path.join(submodule_path, '.gitmodules')}", cwd=monorepo_root_dir)
-                    exec_cmd(f"git commit -m 'Remove .gitmodules in {submodule_path}'", cwd=monorepo_root_dir)
+                    exec_cmd(f"git commit -m '{MONOMAKER_PREFIX} remove .gitmodules in `{submodule_path}`'", cwd=monorepo_root_dir)
                 # remove nested submodule entry from subdirectory
                 nested_submodule_exists = os.path.exists(nested_submodule_abs_path)
                 if nested_submodule_exists:
                     print(f"Removing nested submodule files at {nested_submodule_abs_path} ...")
                     exec_cmd(f"git rm -rf {nested_submodule_relative_path_in_monorepo}", cwd=monorepo_root_dir)
-                    exec_cmd(f"git commit -m 'Remove nested submodule {nested_submodule_relative_path_in_monorepo} before re-tracking in {monorepo_name}'", cwd=monorepo_root_dir)
+                    exec_cmd(f"git commit -m '{MONOMAKER_PREFIX} remove nested submodule `{nested_submodule_relative_path_in_monorepo}` before re-tracking in `{monorepo_name}`'", cwd=monorepo_root_dir)
                 # re-register nested submodule in monorepo
                 # `--force` is needed in case multiple branches contain the same nested submodule (likely)
                 commit_hash = nested_submodule.commit_hash
@@ -349,13 +373,13 @@ def import_submodule(monorepo_root_dir: str,
                 submodule_checkout_success = exec_cmd(f"git checkout {commit_hash}", cwd=nested_submodule_abs_path, allow_failure=True)
                 if submodule_checkout_success.returncode != 0:
                     # grab actual commit hash from the submodule clone
-                    new_commit_hash = exec_cmd("git rev-parse HEAD", cwd=nested_submodule_abs_path).stdout.strip()
+                    new_commit_hash = get_head_commit(nested_submodule_abs_path)
                     print(f"Warning: cannot checkout commit {commit_hash} in nested submodule {nested_submodule_relative_path_in_monorepo}, using {new_commit_hash} instead.")
                     commit_hash = new_commit_hash
                 else:
                     # git does not auto-stage the submodule checkout, so we need to do it manually
                     exec_cmd(f"git add {nested_submodule_relative_path_in_monorepo}", cwd=monorepo_root_dir)
-                exec_cmd(f"git commit -m 'Add nested submodule {nested_submodule_relative_path_in_monorepo} at commit {commit_hash}'", cwd=monorepo_root_dir)
+                exec_cmd(f"git commit -m '{MONOMAKER_PREFIX} add nested submodule `{nested_submodule_relative_path_in_monorepo}` at commit {commit_hash}'", cwd=monorepo_root_dir)
                 # verify monorepo state is clean (nothing to commit, nothing staged)
                 status_out = exec_cmd("git status --porcelain", cwd=monorepo_root_dir).stdout.strip()
                 if status_out != "":
@@ -462,8 +486,8 @@ def main_flow(params: WorkspaceMetadata) -> MigrationImportInfo:
     global monorepo_name, metarepo_name
     report = MigrationImportInfo(metarepo_default_branch, metarepo_name, monorepo_name)
 
-    # Import metarepo
-    import_meta_repo(monorepo_root_dir, metarepo_root_dir)
+    # Import metarepo and get the mapping of branch names to their commit hashes
+    metarepo_branch_commits = import_meta_repo(monorepo_root_dir, metarepo_root_dir)
 
     # Some branches in the metarepo may or may not track some submodules
     # So we need to scan all metarepo branches for submodules, to know which ones to import.
@@ -513,8 +537,10 @@ def main_flow(params: WorkspaceMetadata) -> MigrationImportInfo:
         if not should_consume_submodule_branches(submodule):
             print(f"Skipping import of submodule {submodule.path} as per migration strategy.")
             continue
-        submodule_report = import_submodule(monorepo_root_dir, submodule.url, submodule.path, metarepo_default_branch)
+        submodule_report = import_submodule(monorepo_root_dir, submodule.url, submodule.path, metarepo_default_branch, metarepo_branch_commits)
         report.add_submodule_entry(submodule.path, submodule_report)
+
+    # after all submodules are imported, we can iterate the branches and squash the bookkeeping commits.
 
     print(header_string("Merge Complete"))
     migration_report = MigrationReport(report)

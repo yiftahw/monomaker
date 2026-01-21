@@ -27,6 +27,10 @@ def get_commit_hash(repo: str, branch: str) -> str:
     result: CmdResult = exec_cmd(f"git rev-parse {branch}", cwd=repo)
     return result.stdout.strip()
 
+def get_head_branch(repo: str) -> str:
+    result: CmdResult = exec_cmd("git rev-parse --abbrev-ref HEAD", cwd=repo)
+    return result.stdout.strip()
+
 def repo_url(repo_path: str) -> str:
     return f"file://{repo_path}"
 
