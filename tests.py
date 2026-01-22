@@ -263,6 +263,12 @@ class TestGitOps(unittest.TestCase):
         self.nested_submodule_url = git_test_ops.repo_url(self.nested_submodule_path)
         self.nested_submodule_default_branch_commit_hash = git_test_ops.get_commit_hash(self.nested_submodule_path, self.nested_submodule_content.default_branch)
         self.nested_submodule_bar_branch_commit_hash = git_test_ops.get_commit_hash(self.nested_submodule_path, "bar")
+        self.submodule_a_main_branch_commit_hash = git_test_ops.get_commit_hash(self.submodule_a_path, "main")
+        self.submodule_a_dev_branch_commit_hash = git_test_ops.get_commit_hash(self.submodule_a_path, "dev")
+        self.submodule_a_bar_branch_commit_hash = git_test_ops.get_commit_hash(self.submodule_a_path, "bar")
+        self.metarepo_main_branch_commit_hash = git_test_ops.get_commit_hash(self.repo_path, "main")
+        self.metarepo_foo_branch_commit_hash = git_test_ops.get_commit_hash(self.repo_path, "foo")
+        self.metarepo_bar_branch_commit_hash = git_test_ops.get_commit_hash(self.repo_path, "bar")
         print(header_string("Setup complete"))
 
     def tearDown(self):
@@ -323,8 +329,7 @@ class TestGitOps(unittest.TestCase):
         params = merger.WorkspaceMetadata(
             monorepo_root_dir=self.monorepo_path,
             metarepo_root_dir=self.repo_path,
-            metarepo_default_branch=merger.get_head_branch(self.repo_path),
-            metarepo_branches=merger.get_all_branches(self.repo_path)
+            metarepo_default_branch=merger.get_head_branch(self.repo_path)
         )
         report_info = merger.main_flow(params)
         print(header_string("Migration Report from main_flow"))
@@ -344,15 +349,15 @@ class TestGitOps(unittest.TestCase):
         expected_submodule_report = merger.SubmoduleImportInfo(self.submodule_relative_path, self.submodule_a_content.default_branch)
         # case 2: created "main" in monorepo from metarepo "main" and submodule "main"
         # submodule_a default branch "main" tracks nested_submodule default "main"
-        expected_submodule_report.add_entry("main", "main", "main", expected_nested_submodule_default_tracking)
+        expected_submodule_report.add_entry("main", "main", self.metarepo_main_branch_commit_hash, "main", self.submodule_a_main_branch_commit_hash, expected_nested_submodule_default_tracking)
         # case 3: created "foo" in monorepo from metarepo "foo" and submodule default "main"
         # submodule_a default branch "main" tracks nested_submodule default "main"
-        expected_submodule_report.add_entry("foo", "foo", "main", expected_nested_submodule_default_tracking)
+        expected_submodule_report.add_entry("foo", "foo", self.metarepo_foo_branch_commit_hash, "main", self.submodule_a_main_branch_commit_hash, expected_nested_submodule_default_tracking)
         # case 4: created "dev" in monorepo from metarepo default "main" and submodule "dev"
-        expected_submodule_report.add_entry("dev", "main", "dev")
+        expected_submodule_report.add_entry("dev", "main", self.metarepo_main_branch_commit_hash, "dev", self.submodule_a_dev_branch_commit_hash)
         # "bar" branch in metarepo tracks "bar" branch in submodule
         # (case 2 variant, different nested submodule commit hash)
-        expected_submodule_report.add_entry("bar", "bar", "bar", expected_nested_submodule_bar_tracking)
+        expected_submodule_report.add_entry("bar", "bar", self.metarepo_bar_branch_commit_hash, "bar", self.submodule_a_bar_branch_commit_hash, expected_nested_submodule_bar_tracking)
         expected_migration_report = merger.MigrationImportInfo(self.repo_content.default_branch)
         expected_migration_report.add_submodule_entry(self.submodule_relative_path, expected_submodule_report)
         print(header_string("Expected Migration Report"))
