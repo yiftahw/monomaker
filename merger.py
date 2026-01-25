@@ -387,8 +387,8 @@ def import_submodule(monorepo_root_dir: str,
             # Verify the branch exists - if not, it's a logic error
             if branch not in monorepo_branches:
                 raise RuntimeError(f"Logic error: branch {branch} should exist in {monorepo_name} after preparation loop, but it doesn't. monorepo_branches: {monorepo_branches}")
-            exec_cmd(f"git switch --recurse-submodules {branch}", cwd=monorepo_root_dir)
             print(header_string(f"[{idx+1}/{num_branches}] Importing {submodule_path}:{branch_to_import} to {monorepo_name}:{branch}"))
+            exec_cmd(f"git switch --recurse-submodules {branch}", cwd=monorepo_root_dir)
 
             # prepare submodule branch clone (isolated workspace, git-filter-repo modifies its git history)
             # Clone from local info_clone_dir using file:// protocol to avoid network overhead.
