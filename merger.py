@@ -4,8 +4,8 @@ import argparse
 import atexit
 import configparser
 import tempfile
-from typing import List, Mapping, Optional, Set
-from dataclasses import dataclass
+from typing import Dict, List, Mapping, Optional, Set
+from dataclasses import dataclass, field
 import time
 from models.repository import SubmoduleDef
 from models.migration_report import MigrationImportInfo, MigrationReport, SubmoduleImportInfo
@@ -29,6 +29,89 @@ if not os.path.exists(GIT_FILTER_REPO):
 
 # Ensure sandbox is removed at exit (optional: remove this in debug)
 atexit.register(lambda: os.system(f"rm -rf {SANDBOX_DIR}"))
+
+
+@dataclass
+class MonorepoCache:
+    """
+    Cache for expensive git operations on the monorepo.
+    Avoids repeated calls to get_all_branches() and get_all_submodules().
+    """
+    monorepo_root_dir: str
+    _branches: Optional[Set[str]] = field(default=None, repr=False)
+    # Maps branch name -> list of submodules tracked in that branch
+    _submodules_per_branch: Dict[str, List[SubmoduleDef]] = field(default_factory=dict, repr=False)
+    # Tracks which branches have been scanned for submodules
+    _scanned_branches: Set[str] = field(default_factory=set, repr=False)
+
+    def get_branches(self, force_refresh: bool = False) -> Set[str]:
+        """Get all branches in the monorepo (cached)."""
+        if self._branches is None or force_refresh:
+            self._branches = set(get_all_branches(self.monorepo_root_dir))
+        return self._branches
+
+    def add_branch(self, branch: str):
+        """Register a newly created branch in the cache."""
+        if self._branches is None:
+            self._branches = set()
+        self._branches.add(branch)
+
+    def get_submodules_in_branch(self, branch: str, force_refresh: bool = False) -> List[SubmoduleDef]:
+        """
+        Get all submodules tracked in the given branch (cached).
+        Will checkout the branch if not already on it.
+        """
+        if branch in self._scanned_branches and not force_refresh:
+            return self._submodules_per_branch.get(branch, [])
+        
+        # Need to checkout and scan
+        current_branch = get_head_branch(self.monorepo_root_dir)
+        if current_branch != branch:
+            exec_cmd(f"git checkout --recurse-submodules {branch}", cwd=self.monorepo_root_dir)
+        
+        submodules = get_all_submodules(self.monorepo_root_dir)
+        self._submodules_per_branch[branch] = submodules
+        self._scanned_branches.add(branch)
+        
+        # Clean up any uncommitted changes from submodule switching
+        exec_cmd("git submodule update --checkout --force", cwd=self.monorepo_root_dir)
+        
+        return submodules
+
+    def get_branches_tracking_submodule(self, submodule_path: str) -> Set[str]:
+        """
+        Get all branches that track the given submodule (uses cache).
+        Ensures all known branches are scanned first.
+        """
+        branches = self.get_branches()
+        current_branch = get_head_branch(self.monorepo_root_dir)
+        
+        # Scan any unscanned branches
+        for branch in branches:
+            if branch not in self._scanned_branches:
+                self.get_submodules_in_branch(branch)
+        
+        # Restore original branch
+        if current_branch is not None and current_branch != get_head_branch(self.monorepo_root_dir):
+            exec_cmd(f"git checkout --recurse-submodules {current_branch}", cwd=self.monorepo_root_dir)
+        
+        # Find branches tracking this submodule
+        tracking_branches = set()
+        for branch, submodules in self._submodules_per_branch.items():
+            for submodule in submodules:
+                if submodule.path == submodule_path:
+                    tracking_branches.add(branch)
+                    break
+        
+        return tracking_branches
+
+    def invalidate_branch_submodules(self, branch: str):
+        """
+        Invalidate the submodule cache for a specific branch.
+        Call this after modifying submodules in a branch.
+        """
+        self._scanned_branches.discard(branch)
+        self._submodules_per_branch.pop(branch, None)
 
 def ensure_dir(path: str):
     os.makedirs(path, exist_ok=True)
@@ -159,34 +242,25 @@ def update_all_repo_branches(repo_root_dir: str):
         exec_cmd(f"git pull origin {branch}", cwd=repo_root_dir)
     return branches
 
-def get_monorepo_branches_tracking_submodule(monorepo_root_dir: str, submodule_path: str) -> Set[str]:
-    branches = set(get_all_branches(monorepo_root_dir))
-    tracking_branches = set()
-    current_branch = get_head_branch(monorepo_root_dir)
-    for branch in branches:
-        exec_cmd(f"git checkout --recurse-submodules {branch}", cwd=monorepo_root_dir)
-        submodules_in_branch = get_all_submodules(monorepo_root_dir)
-        for submodule in submodules_in_branch:
-            if submodule.path == submodule_path:
-                tracking_branches.add(branch)
-                break
-        # switching branches might leave uncommitted changes if the current branch doesn't track a submodule we disovered earlier.
-        # hence, git checkout --recurse-submodules might fail due to conflicts.
-        # the following command should reset any such changes.
-        exec_cmd("git submodule update --checkout --force", cwd=monorepo_root_dir)
-    if current_branch is not None:
-        exec_cmd(f"git checkout --recurse-submodules {current_branch}", cwd=monorepo_root_dir)
-    return tracking_branches
+def get_monorepo_branches_tracking_submodule(monorepo_root_dir: str, submodule_path: str, cache: MonorepoCache) -> Set[str]:
+    """
+    Get all branches in the monorepo that track the given submodule.
+    Uses cached data to avoid repeated expensive git operations.
+    """
+    return cache.get_branches_tracking_submodule(submodule_path)
 
 def import_submodule(monorepo_root_dir: str,
                      submodule_repo_url: str,
                      submodule_path: str,
                      metarepo_default_branch: str,
                      metarepo_branch_commits: Mapping[str, str],
+                     cache: MonorepoCache,
                      expected_branches: Optional[Set[str]] = None) -> SubmoduleImportInfo:
     """
     It is expected that monorepo_root_dir points to a git repository where the submodule will be imported.
     the submodule will be cloned from submodule_repo_url, and all its branches will be imported under submodule_path in the monorepo.
+
+    cache: MonorepoCache to avoid repeated expensive git operations.
 
     metarepo_branches_tracking_submodule: is only used for bookkeeping/reporting purposes, to know which metarepo branches actually tracked this submodule.
     """
@@ -212,15 +286,15 @@ def import_submodule(monorepo_root_dir: str,
         branches_dir = os.path.join(tempdir, "branches")
         ensure_dir(branches_dir)
 
-        # previous submodule imports might have created new branches in the monorepo,
-        # so we need to get a fresh list of the monorepo branches on each submodule import.
-        monorepo_branches = set(get_all_branches(monorepo_root_dir))
+        # Get branches from cache. The cache tracks newly created branches via add_branch(),
+        # so subsequent submodule imports will see branches created by earlier imports.
+        monorepo_branches = cache.get_branches()
         print(f"Found {len(monorepo_branches)} {monorepo_name} branches while importing submodule {submodule_path}:\n")
         print("\n".join(monorepo_branches))
 
         # from the available branches, we need to consider which ones track this submodule.
         # NOTE: all branches in the monorepo (either from metarepo or created in previous imports) are already available locally.
-        monorepo_branches_tracking_submodule: Set[str] = get_monorepo_branches_tracking_submodule(monorepo_root_dir, submodule_path)
+        monorepo_branches_tracking_submodule: Set[str] = get_monorepo_branches_tracking_submodule(monorepo_root_dir, submodule_path, cache)
         print(f"Found {len(monorepo_branches_tracking_submodule)} {monorepo_name} branches that actually track the submodule {submodule_path}:\n")
 
         # branches_closure: all branches that need to be considered for this submodule
@@ -259,8 +333,9 @@ def import_submodule(monorepo_root_dir: str,
                 exec_cmd(f"git switch --recurse-submodules {metarepo_default_branch}", cwd=monorepo_root_dir)
                 exec_cmd(f"git switch -c {branch}", cwd=monorepo_root_dir)
                 print(f"Pre-created {monorepo_name} branch {branch} from {metarepo_name} default branch {metarepo_default_branch}.")
-                # Update monorepo_branches to reflect the newly created branch
+                # Update monorepo_branches and cache to reflect the newly created branch
                 monorepo_branches.add(branch)
+                cache.add_branch(branch)
         
         # Switch back to default branch after pre-creating branches
         exec_cmd(f"git switch --recurse-submodules {metarepo_default_branch}", cwd=monorepo_root_dir)
@@ -529,12 +604,15 @@ def main_flow(params: WorkspaceMetadata) -> MigrationImportInfo:
             print(f"  (will NOT consume branches from metarepo for this submodule, as per strategy)")
         print("")
     
+    # Create cache for monorepo operations to avoid repeated expensive git calls
+    monorepo_cache = MonorepoCache(monorepo_root_dir)
+    
     # for each submodule, we will do a fresh clone, and then process it
     for submodule in metarepo_tracked_submodules:
         if not should_consume_submodule_branches(submodule):
             print(f"Skipping import of submodule {submodule.path} as per migration strategy.")
             continue
-        submodule_report = import_submodule(monorepo_root_dir, submodule.url, submodule.path, metarepo_default_branch, metarepo_branch_commits)
+        submodule_report = import_submodule(monorepo_root_dir, submodule.url, submodule.path, metarepo_default_branch, metarepo_branch_commits, monorepo_cache)
         report.add_submodule_entry(submodule.path, submodule_report)
 
     # after all submodules are imported, we can iterate the branches and squash the bookkeeping commits.
