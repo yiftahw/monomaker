@@ -125,6 +125,7 @@ def import_meta_repo(monorepo_root_dir: str, metarepo_root_dir: str):
     """
     # we set up the metarepo as a remote of the monorepo, and we fetch all its branches.
     global metarepo_name
+    print(header_string(f"Importing metarepo {metarepo_name} into monorepo {monorepo_name}"))
     metarepo_branches = get_all_branches(metarepo_root_dir)
     print(f"{metarepo_name} branches: {metarepo_branches}")
     exec_cmd(f"git remote add metarepo {metarepo_root_dir}", cwd=monorepo_root_dir)
@@ -193,7 +194,7 @@ def import_submodule(monorepo_root_dir: str,
     with tempfile.TemporaryDirectory() as tempdir:
         # First, make a minimal clone just to get branch information
         info_clone_dir = os.path.join(tempdir, "info_clone")
-        print(f"Cloning repository to discover branches...")
+        print(header_string(f"Cloning submodule {submodule_path} from {submodule_repo_url} to get branch info ..."))
         exec_cmd(f"git clone {submodule_repo_url} {info_clone_dir}")
         exec_cmd("git fetch --all --prune", cwd=info_clone_dir)
 
@@ -391,25 +392,21 @@ def import_submodule(monorepo_root_dir: str,
                     raise RuntimeError(f"After adding nested submodule {nested_submodule_relative_path_in_monorepo}, its commit hash in {monorepo_name} does not match expected {commit_hash}, got: {ls_tree_out}")
         return report
 
-def get_metarepo_tracked_submodules_mapping(repo_path: str) -> Mapping[SubmoduleDef, Set[str]]:
+def get_metarepo_submodules(repo_path: str) -> Set[SubmoduleDef]:
     """
     Scans all branches in the given metarepo,  
     returns a mapping of {submodule -> set of branches that track them in the metarepo}.
     """
     tracked_submodules: Mapping[SubmoduleDef, Set[str]] = dict()
     branches = get_all_branches(repo_path)
+    result = set()
+    print(header_string("Scanning metarepo for submodules"))
     for branch in branches:
         print(f"--- Scanning branch {branch} for submodules ---")
         exec_cmd(f"git checkout {branch}", cwd=repo_path)
         submodules_in_branch = get_all_submodules(repo_path)
-        for submodule in submodules_in_branch:
-            # ignore commit hash for tracking purposes, 
-            # as we only care here about the existence (or lack) of a submodule in the branch.
-            submodule.commit_hash = ""
-            if submodule not in tracked_submodules:
-                tracked_submodules[submodule] = set()
-            tracked_submodules[submodule].add(branch)
-    return tracked_submodules
+        result.update(set(submodules_in_branch))
+    return result
 
 @dataclass
 class WorkspaceMetadata:
@@ -492,11 +489,11 @@ def main_flow(params: WorkspaceMetadata) -> MigrationImportInfo:
     # Some branches in the metarepo may or may not track some submodules
     # So we need to scan all metarepo branches for submodules, to know which ones to import.
     # for each submodule, we will bookkeep which metarepo branches track it.
-    metarepo_tracked_submodules_mapping = get_metarepo_tracked_submodules_mapping(metarepo_root_dir)
+    metarepo_tracked_submodules = get_metarepo_submodules(metarepo_root_dir)
 
     if params.dump_template:
         output = dict()
-        for submodule in metarepo_tracked_submodules_mapping:
+        for submodule in metarepo_tracked_submodules:
             output[submodule.path] = {
                 "url": submodule.url,
                 "consume_branches": True
@@ -526,14 +523,14 @@ def main_flow(params: WorkspaceMetadata) -> MigrationImportInfo:
         return entry is None or entry.consume_branches and entry.url == submodule.url
 
     print(f"Submodules to import:")
-    for submodule in metarepo_tracked_submodules_mapping:
+    for submodule in metarepo_tracked_submodules:
         print(f"path: {submodule.path}\nurl: {submodule.url}")
         if not should_consume_submodule_branches(submodule):
             print(f"  (will NOT consume branches from metarepo for this submodule, as per strategy)")
         print("")
     
     # for each submodule, we will do a fresh clone, and then process it
-    for submodule in metarepo_tracked_submodules_mapping:
+    for submodule in metarepo_tracked_submodules:
         if not should_consume_submodule_branches(submodule):
             print(f"Skipping import of submodule {submodule.path} as per migration strategy.")
             continue
