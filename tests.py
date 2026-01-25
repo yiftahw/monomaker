@@ -399,6 +399,74 @@ class TestGitOps(unittest.TestCase):
         submodule_expected_branches = set(["main", "dev", "bar"])
         for submodule in report_info.submodules_info.keys():
             self.assertSubmoduleImport(self.monorepo_path, submodule, submodule_expected_branches, self.submodule_a_content)
+
+    def test_submodule_only_branch_keyerror(self):
+        """
+        Regression test for KeyError when a branch exists in submodule but not in metarepo.
+        
+        Scenario:
+        - Metarepo has branches: main, foo (both track submodule)
+        - Submodule has branches: main, submodule_only_branch
+        - When importing submodule_only_branch (case 4), we pre-create it from metarepo default
+        - The pre-created branch inherits submodule refs, making it appear in monorepo_branches_tracking_submodule
+        - But it was never in metarepo_branch_commits, so we must use metarepo default's commit hash
+        """
+        # Create a simple metarepo with main and foo branches
+        metarepo_content = RepoContent(
+            default_branch="main",
+            branches=[
+                BranchContent(name="main", files=[FileContent("meta.txt", "main content", "Add meta.txt")]),
+                BranchContent(name="foo", files=[FileContent("foo.txt", "foo content", "Add foo.txt")]),
+            ]
+        )
+        metarepo_path = create_temporary_repo(metarepo_content)
+        
+        # Create submodule with main and a submodule-only branch
+        submodule_content = RepoContent(
+            default_branch="main",
+            branches=[
+                BranchContent(name="main", files=[FileContent("sub.txt", "sub content", "Add sub.txt")]),
+                BranchContent(name="submodule_only_branch", files=[FileContent("only.txt", "only content", "Add only.txt")]),
+            ]
+        )
+        submodule_path = create_temporary_repo(submodule_content)
+        submodule_url = f"file://{submodule_path}"
+        
+        # Add submodule to metarepo main and foo branches
+        for branch in ["main", "foo"]:
+            git_test_ops.add_local_submodule(metarepo_path, branch, submodule_path, "the_submodule", "main")
+        git_test_ops.switch_branch(metarepo_path, "main")
+        
+        # Create empty monorepo
+        monorepo_path = tempfile.mkdtemp()
+        git_test_ops.create_repo(monorepo_path, "main")
+        
+        try:
+            # This should NOT raise KeyError
+            params = merger.WorkspaceMetadata(
+                monorepo_root_dir=monorepo_path,
+                metarepo_root_dir=metarepo_path,
+                metarepo_default_branch="main"
+            )
+            report = merger.main_flow(params)
+            
+            # Verify submodule_only_branch was created and uses metarepo main's commit
+            monorepo_branches = set(merger.get_all_branches(monorepo_path))
+            self.assertIn("submodule_only_branch", monorepo_branches)
+            
+            # The submodule_only_branch should reference metarepo "main" branch
+            submodule_report = report.submodules_info["the_submodule"]
+            submodule_only_entry = next(
+                (e for e in submodule_report.entries if e.monorepo_branch == "submodule_only_branch"),
+                None
+            )
+            self.assertIsNotNone(submodule_only_entry)
+            self.assertEqual(submodule_only_entry.metarepo_branch, "main")  # Should use default, not "submodule_only_branch"
+            
+        finally:
+            shutil.rmtree(metarepo_path, ignore_errors=True)
+            shutil.rmtree(submodule_path, ignore_errors=True)
+            shutil.rmtree(monorepo_path, ignore_errors=True)
             
 if __name__ == "__main__":
     unittest.main()

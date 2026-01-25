@@ -411,9 +411,14 @@ def import_submodule(monorepo_root_dir: str,
             submodule_branch_commit_hash = get_head_commit(branch_clone_dir)
 
             # Record in report
+            # Determine which metarepo branch to use for the commit hash.
+            # If this branch doesn't exist in metarepo (case 4: submodule-only branch),
+            # use the metarepo default branch. We check metarepo_branch_commits directly
+            # because monorepo_branches_tracking_submodule may include pre-created branches
+            # that inherited submodule definitions from metarepo default.
             metarepo_branch_used = branch
-            if branch not in monorepo_branches_tracking_submodule:
-                # case 4: submodule feature branch with the metarepo's default branch
+            if branch not in metarepo_branch_commits:
+                # case 4: submodule feature branch - use metarepo's default branch
                 metarepo_branch_used = metarepo_default_branch
             
             # Get the metarepo commit hash from the mapping (captured during import_meta_repo)
