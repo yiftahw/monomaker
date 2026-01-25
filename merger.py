@@ -266,7 +266,8 @@ def import_submodule(monorepo_root_dir: str,
     """
     global monorepo_name, metarepo_name
     with tempfile.TemporaryDirectory() as tempdir:
-        # First, make a minimal clone just to get branch information
+        # First, make a full clone to serve as a local cache for all branches.
+        # This avoids repeated network calls when cloning individual branches later.
         info_clone_dir = os.path.join(tempdir, "info_clone")
         print(header_string(f"Cloning submodule {submodule_path} from {submodule_repo_url} to get branch info ..."))
         exec_cmd(f"git clone {submodule_repo_url} {info_clone_dir}")
@@ -281,6 +282,12 @@ def import_submodule(monorepo_root_dir: str,
         print(f"Found branches for submodule {submodule_path}: {submodule_branches}")
         if expected_branches is not None and submodule_branches != expected_branches:
             raise RuntimeError(f"Submodule branches mismatch. Expected: {expected_branches}, Found: {submodule_branches}")
+        
+        # Create local tracking branches for all remote branches so we can clone from this local repo.
+        # git clone only sees local branches, not remote tracking refs.
+        for branch in submodule_branches:
+            if branch != submodule_default_branch:  # default branch already exists locally
+                exec_cmd(f"git branch {branch} origin/{branch}", cwd=info_clone_dir, allow_failure=True)
         
         # Process each branch
         branches_dir = os.path.join(tempdir, "branches")
@@ -384,10 +391,13 @@ def import_submodule(monorepo_root_dir: str,
             print(header_string(f"[{idx+1}/{num_branches}] Importing {submodule_path}:{branch_to_import} to {monorepo_name}:{branch}"))
 
             # prepare submodule branch clone (isolated workspace, git-filter-repo modifies its git history)
+            # Clone from local info_clone_dir using file:// protocol to avoid network overhead.
+            # info_clone_dir already has all branches fetched, so this is purely local I/O.
             branch_clone_dir_name = f"clone_{branch_to_import.replace('/', '_')}"
             branch_clone_dir = os.path.join(branches_dir, branch_clone_dir_name)
             exec_cmd(f"rm -rf {branch_clone_dir}") # might already exist if multiple metarepo branches point to same submodule branch
-            exec_cmd(f"git clone -b {branch_to_import} --single-branch {submodule_repo_url} {branch_clone_dir}")
+            info_clone_abs = os.path.abspath(info_clone_dir)
+            exec_cmd(f"git clone -b {branch_to_import} --single-branch file://{info_clone_abs} {branch_clone_dir}")
             submodule_branch_commit_hash = get_head_commit(branch_clone_dir)
 
             # Record in report
