@@ -7,7 +7,7 @@ import os
 
 from utils import exec_cmd, listdir_list, pretty_print_list, header_string
 import git_test_ops
-from models.repository import FileContent, BranchContent, RepoContent
+from models.repository import FileContent, BranchContent, RepoContent, SubmoduleDef
 from models.migration_report import MigrationReport, MigrationImportInfo, SubmoduleImportInfo, SubmoduleImportInfoEntry
 import merger
 
@@ -17,6 +17,35 @@ with open("debug.log", "w") as f:
 def debug_log(message: str):
     with open("debug.log", "a") as f:
         f.write(message + "\n")
+
+
+class TestSubmoduleDef(unittest.TestCase):
+    """Tests for SubmoduleDef equality and hashing behavior."""
+    
+    def test_submodule_def_set_deduplication(self):
+        """SubmoduleDefs with same path and url should deduplicate in a set, even with different commit_hash."""
+        sub1 = SubmoduleDef(path="lib/foo", url="https://github.com/org/foo.git", commit_hash="abc123")
+        sub2 = SubmoduleDef(path="lib/foo", url="https://github.com/org/foo.git", commit_hash="def456")
+        sub3 = SubmoduleDef(path="lib/bar", url="https://github.com/org/bar.git", commit_hash="abc123")
+        
+        # sub1 and sub2 have same path/url, should be considered equal
+        self.assertEqual(sub1, sub2)
+        self.assertEqual(hash(sub1), hash(sub2))
+        
+        # sub1 and sub3 have different path/url, should not be equal
+        self.assertNotEqual(sub1, sub3)
+        
+        # Set should deduplicate sub1 and sub2
+        result = set()
+        result.add(sub1)
+        result.add(sub2)
+        result.add(sub3)
+        
+        self.assertEqual(len(result), 2, f"Expected 2 unique submodules, got {len(result)}: {result}")
+        
+        # Verify the paths in the set
+        paths = {s.path for s in result}
+        self.assertEqual(paths, {"lib/foo", "lib/bar"})
 
 def create_and_fill_branch(repo_path: str, branch_content: BranchContent, branch_name: str, default_branch: str):
     """Create a branch and fill it with files as per RepoContent."""

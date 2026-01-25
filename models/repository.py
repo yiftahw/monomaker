@@ -35,6 +35,12 @@ class SubmoduleDef:
     url: str
     commit_hash: str
 
+    def __eq__(self, other):
+        """Two SubmoduleDefs are equal if they have the same path and url (commit_hash may differ across branches)."""
+        if not isinstance(other, SubmoduleDef):
+            return False
+        return self.path == other.path and self.url == other.url
+
     def __hash__(self):
-        """allow to be used in sets/dicts"""
-        return hash((self.path, self.url, self.commit_hash))
+        """allow to be used in sets/dicts - must be consistent with __eq__"""
+        return hash((self.path, self.url))

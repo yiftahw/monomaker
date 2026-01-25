@@ -235,11 +235,21 @@ def update_all_repo_branches(repo_root_dir: str):
     """
     branches = get_all_branches(repo_root_dir)
     print(f"Updating all branches in repo at {repo_root_dir}: {branches}")
+    
+    # Single network call to fetch all branches at once
+    exec_cmd("git fetch --all --prune", cwd=repo_root_dir)
+    
+    # Update local branches to match remote tracking branches (no network calls)
+    current_branch = get_head_branch(repo_root_dir)
     num_branches = len(branches)
     for idx, branch in enumerate(branches):
         print(f"=== [{idx+1}/{num_branches}] Updating branch {branch} ===")
-        exec_cmd(f"git checkout {branch}", cwd=repo_root_dir)
-        exec_cmd(f"git pull origin {branch}", cwd=repo_root_dir)
+        if branch == current_branch:
+            # Can't update checked-out branch with `git branch -f`, use reset instead
+            exec_cmd(f"git reset --hard origin/{branch}", cwd=repo_root_dir)
+        else:
+            # Update branch ref directly without checkout
+            exec_cmd(f"git branch -f {branch} origin/{branch}", cwd=repo_root_dir)
     return branches
 
 def get_monorepo_branches_tracking_submodule(monorepo_root_dir: str, submodule_path: str, cache: MonorepoCache) -> Set[str]:
@@ -483,7 +493,6 @@ def get_metarepo_submodules(repo_path: str) -> Set[SubmoduleDef]:
     Scans all branches in the given metarepo,  
     returns a mapping of {submodule -> set of branches that track them in the metarepo}.
     """
-    tracked_submodules: Mapping[SubmoduleDef, Set[str]] = dict()
     branches = get_all_branches(repo_path)
     result = set()
     print(header_string("Scanning metarepo for submodules"))
