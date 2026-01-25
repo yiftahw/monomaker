@@ -8,3 +8,4 @@ git-filter-repo
 *strategy.json
 *log.txt
 *report.json
+logs/
