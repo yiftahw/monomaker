@@ -336,6 +336,7 @@ def import_submodule(monorepo_root_dir: str,
                 # Update monorepo_branches and cache to reflect the newly created branch
                 monorepo_branches.add(branch)
                 cache.add_branch(branch)
+                branches_closure.add(branch)
         
         # Switch back to default branch after pre-creating branches
         exec_cmd(f"git switch --recurse-submodules {metarepo_default_branch}", cwd=monorepo_root_dir)
@@ -375,7 +376,7 @@ def import_submodule(monorepo_root_dir: str,
                 exec_cmd("git clean -fdX", cwd=monorepo_root_dir)
             
             # prepare monorepo branch
-            # Switch to the branch (it should exist now, either from metarepo or pre-created above)
+            # Switch to the branch (it should exist now, either existed in the metarepo or pre-created above)
             # Verify the branch exists - if not, it's a logic error
             if branch not in monorepo_branches:
                 raise RuntimeError(f"Logic error: branch {branch} should exist in {monorepo_name} after preparation loop, but it doesn't. monorepo_branches: {monorepo_branches}")
