@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+from enum import Enum
 import os
 import argparse
 import atexit
@@ -7,6 +8,8 @@ import tempfile
 from typing import Dict, List, Mapping, Optional, Set
 from dataclasses import dataclass, field
 import time
+
+from pathlib import Path
 from models.repository import SubmoduleDef
 from models.migration_report import MigrationImportInfo, MigrationReport, SubmoduleImportInfo
 from utils import exec_cmd, header_string
@@ -665,6 +668,189 @@ class Tee:
         for f in self.files:
             f.flush()
 
+
+@dataclass
+class CommitRange:
+    """Represents a range of commits to squash. Both are commit hashes.
+    
+    head: The newest commit in the range (closest to HEAD)
+    tail: The oldest commit in the range (furthest from HEAD)
+    """
+    head: str
+    tail: str
+
+@dataclass
+class SquashableResult:
+    """Result of check_squashable, caching the commit ranges per branch.
+    
+    is_squashable: True if all branches have contiguous monomaker commits
+    commit_ranges: Mapping of branch name to CommitRange for branches with monomaker commits
+    """
+    is_squashable: bool = True
+    commit_ranges: Dict[str, CommitRange] = field(default_factory=dict)
+
+
+def check_squashable(working_directory: str) -> SquashableResult:
+    """
+    Check whether the repository in the given working directory is squashable.
+    
+    Squashable means that for each branch, all commits containing MONOMAKER_PREFIX
+    are contiguous (they appear as a consecutive block at the HEAD of the branch).
+    
+    Git log returns commits in newest-first order (HEAD first, oldest last).
+    So we expect monomaker commits to appear first, then non-monomaker commits.
+    
+    Args:
+        working_directory: Path to the working directory containing the repository.
+        
+    Returns:
+        SquashableResult with is_squashable flag and commit_ranges per branch.
+    """
+    print(header_string(f"Checking if repository at {working_directory} is squashable ..."))
+    branches = get_all_branches(working_directory)
+    num_branches = len(branches)
+    current_branch = get_head_branch(working_directory)
+    print(f"Found branches: {branches}")
+    
+    # squashable branches are branches where their commits containing the MONOMAKER_PREFIX
+    # are contiguous at the HEAD of the commit history.
+    # Since git log is newest-first, we expect: [monomaker, monomaker, ..., non-monomaker, non-monomaker, ...]
+    class State(Enum):
+        NOT_FOUND = 0
+        FOUND_PREFIX = 1
+        FOUND_NON_PREFIX = 2
+
+    result = SquashableResult(is_squashable=True, commit_ranges={})
+    
+    for number, branch in enumerate(branches):
+        # need to clean up local changes before running check out to avoid conflicts
+        exec_cmd("git clean -fdx", cwd=working_directory, verbose=False)
+        exec_cmd("git reset --hard", cwd=working_directory, verbose=False)
+        exec_cmd(f"git checkout {branch}", cwd=working_directory, verbose=False)
+        state = State.NOT_FOUND
+        
+        # git log: newest first (HEAD at index 0, oldest at end)
+        commit_log = exec_cmd("git log --pretty=format:'%H %s'", cwd=working_directory, verbose=False).stdout.strip().splitlines()
+        
+        if not commit_log:
+            print(f"[{number+1}/{num_branches}] Branch {branch} has no commits, skipping.")
+            continue
+        
+        first_monomaker_commit = None  # HEAD of the range (newest)
+        last_monomaker_commit = None   # tail of the range (oldest)
+        
+        for line in commit_log:
+            commit_hash, commit_msg = line.split(" ", 1)
+            if MONOMAKER_PREFIX in commit_msg:
+                if state == State.NOT_FOUND:
+                    state = State.FOUND_PREFIX
+                    first_monomaker_commit = commit_hash  # This is the newest (HEAD of range)
+                    last_monomaker_commit = commit_hash
+                elif state == State.FOUND_PREFIX:
+                    last_monomaker_commit = commit_hash  # Keep updating to find the oldest
+                elif state == State.FOUND_NON_PREFIX:
+                    print(f"[{number+1}/{num_branches}] Branch {branch} is NOT squashable: found monomaker commit after non-monomaker commit: '{commit_msg}'")
+                    result.is_squashable = False
+                    break
+            elif state == State.NOT_FOUND:
+                # First commit (HEAD) doesn't have monomaker prefix - not squashable
+                print(f"[{number+1}/{num_branches}] Branch {branch} is NOT squashable: HEAD does not contain monomaker prefix")
+                result.is_squashable = False
+                break
+            elif state == State.FOUND_PREFIX:
+                state = State.FOUND_NON_PREFIX
+        
+        if state == State.NOT_FOUND:
+            # Finished loop without finding any commits (shouldn't happen if commit_log is not empty, but just in case)
+            print(f"[{number+1}/{num_branches}] Branch {branch} has no monomaker commits, NOT squashable.")
+            result.is_squashable = False
+        elif result.is_squashable:
+            print(f"[{number+1}/{num_branches}] Branch {branch} is squashable.")
+            if first_monomaker_commit and last_monomaker_commit:
+                result.commit_ranges[branch] = CommitRange(head=first_monomaker_commit, tail=last_monomaker_commit)
+                print(f"HEAD: {first_monomaker_commit}, TAIL: {last_monomaker_commit}")
+        else:
+            print(f"[{number+1}/{num_branches}] Branch {branch} is NOT squashable.")
+    
+    # finalize
+    exec_cmd(f"git checkout {current_branch}", cwd=working_directory)
+    return result
+
+
+def squash_commits(head: str, tail: str, title: str, description: str = "", cwd: Optional[str] = None):
+    """
+    Squash a contiguous range of commits into a single commit.
+    
+    Args:
+        tail: The oldest commit hash in the range (furthest from HEAD)
+        head: The newest commit hash in the range (closest to HEAD, typically HEAD itself)
+        title: The title for the squashed commit
+        description: Optional description for the squashed commit
+        cwd: Working directory for git commands
+    """
+    # sanity check: ensure contiguity
+    cmd = f"git rev-list --reverse --first-parent --ancestry-path {tail}^..{head}"
+    rev_list = exec_cmd(cmd, cwd=cwd).stdout.strip().splitlines()
+    if rev_list[0] != tail or rev_list[-1] != head:
+        raise RuntimeError("Commit range is not contiguous")
+
+    # collect original messages
+    # old_messages = exec_cmd(f"git log --format='- %s%b' {tail}^..{head}", cwd=cwd).stdout.strip()
+    old_messages = exec_cmd(f"git log --format='%s%b' --reverse --first-parent --ancestry-path {tail}^..{head}", cwd=cwd).stdout.strip()
+    
+    commit_msg = f"""{title}
+{description}
+---
+Original commit messages:
+{old_messages}
+"""
+
+    # Use a temp file outside of .git to avoid git cleaning it up
+    if cwd:
+        msg_file = Path(cwd).resolve() / "MONOMAKER_SQUASH_MSG.tmp"
+    else:
+        msg_file = Path("MONOMAKER_SQUASH_MSG.tmp").resolve()
+    msg_file.write_text(commit_msg)
+
+    with open("debug_squash_msg.txt", "w") as f:
+        f.write(commit_msg)
+
+    # squash
+    exec_cmd(f"git reset --soft {tail}^", cwd=cwd)
+    exec_cmd(f'git commit -F "{msg_file}"', cwd=cwd)
+
+    msg_file.unlink()
+
+
+def squash_monomaker_commits(working_directory: str):
+    """
+    Squash all monomaker commits in the repository at working_directory.
+    
+    For each branch, finds contiguous monomaker commits at the HEAD and squashes them into a single commit.
+    """
+    print(header_string(f"Squashing monomaker commits in repository at {working_directory} ..."))
+    squashable_result = check_squashable(working_directory)
+    if not squashable_result.is_squashable:
+        raise RuntimeError("Repository is not squashable. Cannot proceed with squashing monomaker commits.")
+    
+    num_branches = len(squashable_result.commit_ranges)
+    current_branch = get_head_branch(working_directory)
+    for number, (branch, commit_range) in enumerate(squashable_result.commit_ranges.items()):
+        print(f"[{number+1}/{num_branches}] Squashing monomaker commits in branch {branch} ...")
+        exec_cmd("git clean -fdx && git reset --hard", cwd=working_directory, verbose=False)
+        exec_cmd("", cwd=working_directory, verbose=False)
+        exec_cmd(f"git checkout {branch}", cwd=working_directory, verbose=False)
+        squash_commits(
+            head=commit_range.head,
+            tail=commit_range.tail,
+            title=f"{MONOMAKER_PREFIX} Squashed commit",
+            cwd=working_directory
+        )
+    # finalize
+    exec_cmd(f"git clean -fdx && git reset --hard", cwd=working_directory, verbose=False)
+    exec_cmd(f"git checkout {current_branch}", cwd=working_directory, verbose=False)
+
+
 # ---------- CLI ----------
 def main():
     start_time = time.monotonic()
@@ -702,6 +888,18 @@ def main():
         default=None,
         help="Path to save the strategy template file. If not provided, defaults to the current directory."
     )
+    parser.add_argument(
+        "--check-squashable",
+        dest="check_squashable",
+        action="store_true",
+        help="If set, checks whether the repository is squashable."
+    )
+    parser.add_argument(
+        "--squash",
+        dest="squash",
+        action="store_true",
+        help="If set, squashes all monomaker commits in the monorepo after migration."
+    )
     args = parser.parse_args()
     if args.dump_log:
         # redirect stdout to a file
@@ -710,6 +908,15 @@ def main():
         log_file = open(log_txt_path, "w")
         sys.stdout = Tee(sys.stdout, log_file)
         sys.stderr = Tee(sys.stderr, log_file)
+    
+    # Handle --check-squashable mode
+    if args.check_squashable:
+        result = check_squashable(args.metarepo_url)
+        sys.exit(0 if result else 1)
+    elif args.squash:
+        squash_monomaker_commits(args.metarepo_url)
+        sys.exit(0)
+    
     print("start time:", time.ctime())
     workspace_params = prepare_workspace(args.metarepo_url, args.monorepo_url)
     workspace_params.dump_template = args.dump_template
