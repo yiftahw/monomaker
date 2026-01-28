@@ -799,7 +799,7 @@ def squash_commits(head: str, tail: str, title: str, description: str = "", cwd:
     old_messages = exec_cmd(f"git log --format='%s%b' --reverse --first-parent --ancestry-path {tail}^..{head}", cwd=cwd).stdout.strip()
     
     commit_msg = f"""{title}
-
+{description}
 ---
 Original commit messages:
 {old_messages}
