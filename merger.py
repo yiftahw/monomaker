@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+from enum import Enum
 import os
 import argparse
 import atexit
@@ -665,6 +666,60 @@ class Tee:
         for f in self.files:
             f.flush()
 
+
+def check_squashable(working_directory: str) -> bool:
+    """
+    Check whether the repository in the given working directory is squashable.
+    
+    Args:
+        working_directory: Path to the working directory containing the repository.
+        
+    Returns:
+        True if the repository is squashable, False otherwise.
+    """
+    print(header_string(f"Checking if repository at {working_directory} is squashable ..."))
+    branches = get_all_branches(working_directory)
+    num_branches = len(branches)
+    current_branch = get_head_branch(working_directory)
+    print(f"Found branches: {branches}")
+    # squashable branches are branches where their commits containing the MONOMAKER_PREFIX
+    # are contiguous in the commit history.
+    class State(Enum):
+        NOT_FOUND = 0
+        FOUND_PREFIX = 1
+        FOUND_NON_PREFIX = 2
+
+    is_squashable = True
+    for number, branch in enumerate(branches):
+        # need to clean up local changes before running check out to avoid conflicts
+        exec_cmd("git clean -fdx", cwd=working_directory, verbose=False)
+        exec_cmd("git reset --hard", cwd=working_directory, verbose=False)
+        exec_cmd(f"git checkout {branch}", cwd=working_directory, verbose=False)
+        state = State.NOT_FOUND
+        commit_log = exec_cmd("git log --pretty=format:%s", cwd=working_directory, verbose=False).stdout.strip().splitlines()
+        for commit_msg in commit_log:
+            if MONOMAKER_PREFIX in commit_msg:
+                if state == State.NOT_FOUND:
+                    state = State.FOUND_PREFIX
+                elif state == State.FOUND_NON_PREFIX:
+                    print(f"[{number+1}/{num_branches}] Branch {branch} is NOT squashable: found non-prefix commit followed by prefix commit: '{commit_msg}'")
+                    is_squashable = False
+                    break
+            else:
+                if state == State.FOUND_PREFIX:
+                    state = State.FOUND_NON_PREFIX
+        if state == State.NOT_FOUND:
+            print(f"[{number+1}/{num_branches}] Branch {branch} has no monomaker commits, considered squashable.")
+        elif is_squashable:
+            print(f"[{number+1}/{num_branches}] Branch {branch} is squashable.")
+        else:
+            print(f"[{number+1}/{num_branches}] Branch {branch} is NOT squashable.")
+    # finalize
+    exec_cmd(f"git checkout {current_branch}", cwd=working_directory)
+    return is_squashable
+        
+
+
 # ---------- CLI ----------
 def main():
     start_time = time.monotonic()
@@ -702,6 +757,12 @@ def main():
         default=None,
         help="Path to save the strategy template file. If not provided, defaults to the current directory."
     )
+    parser.add_argument(
+        "--check-squashable",
+        dest="check_squashable",
+        action="store_true",
+        help="If set, checks whether the repository is squashable."
+    )
     args = parser.parse_args()
     if args.dump_log:
         # redirect stdout to a file
@@ -710,6 +771,12 @@ def main():
         log_file = open(log_txt_path, "w")
         sys.stdout = Tee(sys.stdout, log_file)
         sys.stderr = Tee(sys.stderr, log_file)
+    
+    # Handle --check-squashable mode
+    if args.check_squashable:
+        result = check_squashable(args.metarepo_url)
+        sys.exit(0 if result else 1)
+    
     print("start time:", time.ctime())
     workspace_params = prepare_workspace(args.metarepo_url, args.monorepo_url)
     workspace_params.dump_template = args.dump_template
