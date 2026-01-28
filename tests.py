@@ -467,6 +467,106 @@ class TestGitOps(unittest.TestCase):
             shutil.rmtree(metarepo_path, ignore_errors=True)
             shutil.rmtree(submodule_path, ignore_errors=True)
             shutil.rmtree(monorepo_path, ignore_errors=True)
-            
+
+
+class TestSquashCommits(unittest.TestCase):
+    """Tests for the squash_commits function."""
+
+    def test_squash_recent_commits(self):
+        """
+        Create a repo with 6 commits (indices 0-5), squash the last 4 (indices 2-5 = HEAD~3 to HEAD),
+        verify we end up with 3 commits and the squashed one contains all original messages.
+        
+        This tests the use case: squash from HEAD~N+1 to HEAD (most recent N commits).
+        """
+        # Create a temporary repo with 6 commits
+        repo_path = tempfile.mkdtemp()
+        git_test_ops.create_repo(repo_path, "main")  # Creates initial commit (commit 0)
+        
+        git_test_ops.commit_file(
+            repo_path, "file1.txt", "Content 1",
+            "Commit 1: First file\n\nThis is the description for commit 1.\nIt should remain after squash."
+        )
+        git_test_ops.commit_file(
+            repo_path, "file2.txt", "Content 2",
+            "Commit 2: Second file\n\nDescription for commit 2.\nFirst commit to squash."
+        )
+        git_test_ops.commit_file(
+            repo_path, "file3.txt", "Content 3",
+            "Commit 3: Third file\n\nDescription for commit 3.\nSecond commit to squash."
+        )
+        git_test_ops.commit_file(
+            repo_path, "file4.txt", "Content 4",
+            "Commit 4: Fourth file\n\nDescription for commit 4.\nThird commit to squash."
+        )
+        git_test_ops.commit_file(
+            repo_path, "file5.txt", "Content 5",
+            "Commit 5: Fifth file\n\nDescription for commit 5.\nFourth and last commit to squash."
+        )
+        
+        # Get all commit hashes (newest first - natural git log order)
+        # This matches how check_squashable works
+        log_result = exec_cmd("git log --format=%H", cwd=repo_path)
+        commits = log_result.stdout.strip().splitlines()
+        # commits[0] = HEAD (commit 5), commits[5] = oldest (initial commit)
+        
+        self.assertEqual(len(commits), 6, f"Expected 6 commits, got {len(commits)}")
+        
+        # We want to squash commits 2-5 (the last 4 commits)
+        # In newest-first order: commits[0]=5, commits[1]=4, commits[2]=3, commits[3]=2, commits[4]=1, commits[5]=initial
+        # So squash range is commits[0] (head/newest) to commits[3] (tail/oldest of squash range)
+        head_to_squash = commits[0]  # HEAD - newest commit to squash
+        tail_to_squash = commits[3]  # oldest commit to squash
+        
+        # Squash the last 4 commits (commits 2-5)
+        # squash_commits takes (tail, head) - oldest first, newest last
+        merger.squash_commits(
+            first=tail_to_squash,   # oldest commit in range
+            last=head_to_squash,    # newest commit in range (HEAD)
+            title="Squashed: Commits 2-5",
+            description="This is the squash commit combining 4 commits.",
+            cwd=repo_path
+        )
+        
+        # Verify we now have 3 commits (newest first)
+        log_result = exec_cmd("git log --format=%H", cwd=repo_path)
+        new_commits = log_result.stdout.strip().splitlines()
+        
+        self.assertEqual(len(new_commits), 3, f"Expected 3 commits after squash, got {len(new_commits)}")
+        
+        # In newest-first order: new_commits[0]=squashed, new_commits[1]=commit1, new_commits[2]=initial
+        # Verify the last two commits are preserved (initial and commit 1)
+        self.assertEqual(new_commits[2], commits[5], "Initial commit should be preserved")
+        self.assertEqual(new_commits[1], commits[4], "Commit 1 should be preserved")
+        # new_commits[0] is the squashed commit (new hash)
+        
+        # Verify the squashed commit message contains all original messages
+        squash_commit_msg = exec_cmd(f"git log -1 --format=%B {new_commits[0]}", cwd=repo_path).stdout
+        
+        # Check title and description
+        self.assertIn("Squashed: Commits 2-5", squash_commit_msg)
+        self.assertIn("This is the squash commit combining 4 commits.", squash_commit_msg)
+        
+        # Check that all original commit messages are preserved (commits 2-5)
+        self.assertIn("Commit 2: Second file", squash_commit_msg)
+        self.assertIn("Description for commit 2", squash_commit_msg)
+        self.assertIn("Commit 3: Third file", squash_commit_msg)
+        self.assertIn("Description for commit 3", squash_commit_msg)
+        self.assertIn("Commit 4: Fourth file", squash_commit_msg)
+        self.assertIn("Description for commit 4", squash_commit_msg)
+        self.assertIn("Commit 5: Fifth file", squash_commit_msg)
+        self.assertIn("Description for commit 5", squash_commit_msg)
+        
+        # Verify commit 1's message is NOT in the squash (it should remain separate)
+        self.assertNotIn("Commit 1: First file", squash_commit_msg)
+        
+        # Verify all files are present in the working tree
+        for i in range(1, 6):
+            file_path = os.path.join(repo_path, f"file{i}.txt")
+            self.assertTrue(os.path.isfile(file_path), f"file{i}.txt should exist after squash")
+            with open(file_path, "r") as f:
+                self.assertEqual(f.read(), f"Content {i}")
+
+
 if __name__ == "__main__":
     unittest.main()
