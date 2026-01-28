@@ -777,14 +777,24 @@ def check_squashable(working_directory: str) -> SquashableResult:
     return result
 
 
-def squash_commits(first: str, last: str, title: str, description: str = "", cwd: Optional[str] = None):
+def squash_commits(head: str, tail: str, title: str, description: str = "", cwd: Optional[str] = None):
+    """
+    Squash a contiguous range of commits into a single commit.
+    
+    Args:
+        tail: The oldest commit hash in the range (furthest from HEAD)
+        head: The newest commit hash in the range (closest to HEAD, typically HEAD itself)
+        title: The title for the squashed commit
+        description: Optional description for the squashed commit
+        cwd: Working directory for git commands
+    """
     # sanity check: ensure contiguity
-    rev_list = exec_cmd(f"git rev-list --reverse {first}^..{last}", cwd=cwd).stdout.strip().splitlines()
-    if rev_list[0] != first or rev_list[-1] != last:
+    rev_list = exec_cmd(f"git rev-list --reverse {tail}^..{head}", cwd=cwd).stdout.strip().splitlines()
+    if rev_list[0] != tail or rev_list[-1] != head:
         raise RuntimeError("Commit range is not contiguous")
 
     # collect original messages
-    old_messages = exec_cmd(f"git log --format='- %s%n%n%b' {first}^..{last}", cwd=cwd).stdout.strip()
+    old_messages = exec_cmd(f"git log --format='- %s%b' {tail}^..{head}", cwd=cwd).stdout.strip()
     
     commit_msg = f"""{title}
 
@@ -803,7 +813,7 @@ Original commit messages:
     msg_file.write_text(commit_msg)
 
     # squash
-    exec_cmd(f"git reset --soft {first}^", cwd=cwd)
+    exec_cmd(f"git reset --soft {tail}^", cwd=cwd)
     exec_cmd(f'git commit -F "{msg_file}"', cwd=cwd)
 
     msg_file.unlink()

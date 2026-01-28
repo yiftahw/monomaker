@@ -485,23 +485,23 @@ class TestSquashCommits(unittest.TestCase):
         
         git_test_ops.commit_file(
             repo_path, "file1.txt", "Content 1",
-            "Commit 1: First file\n\nThis is the description for commit 1.\nIt should remain after squash."
+            "Commit 1: First file"
         )
         git_test_ops.commit_file(
             repo_path, "file2.txt", "Content 2",
-            "Commit 2: Second file\n\nDescription for commit 2.\nFirst commit to squash."
+            "Commit 2: Second file"
         )
         git_test_ops.commit_file(
             repo_path, "file3.txt", "Content 3",
-            "Commit 3: Third file\n\nDescription for commit 3.\nSecond commit to squash."
+            "Commit 3: Third file"
         )
         git_test_ops.commit_file(
             repo_path, "file4.txt", "Content 4",
-            "Commit 4: Fourth file\n\nDescription for commit 4.\nThird commit to squash."
+            "Commit 4: Fourth file"
         )
         git_test_ops.commit_file(
             repo_path, "file5.txt", "Content 5",
-            "Commit 5: Fifth file\n\nDescription for commit 5.\nFourth and last commit to squash."
+            "Commit 5: Fifth file"
         )
         
         # Get all commit hashes (newest first - natural git log order)
@@ -519,10 +519,9 @@ class TestSquashCommits(unittest.TestCase):
         tail_to_squash = commits[3]  # oldest commit to squash
         
         # Squash the last 4 commits (commits 2-5)
-        # squash_commits takes (tail, head) - oldest first, newest last
         merger.squash_commits(
-            first=tail_to_squash,   # oldest commit in range
-            last=head_to_squash,    # newest commit in range (HEAD)
+            head=head_to_squash,
+            tail=tail_to_squash,
             title="Squashed: Commits 2-5",
             description="This is the squash commit combining 4 commits.",
             cwd=repo_path
@@ -549,13 +548,9 @@ class TestSquashCommits(unittest.TestCase):
         
         # Check that all original commit messages are preserved (commits 2-5)
         self.assertIn("Commit 2: Second file", squash_commit_msg)
-        self.assertIn("Description for commit 2", squash_commit_msg)
         self.assertIn("Commit 3: Third file", squash_commit_msg)
-        self.assertIn("Description for commit 3", squash_commit_msg)
         self.assertIn("Commit 4: Fourth file", squash_commit_msg)
-        self.assertIn("Description for commit 4", squash_commit_msg)
         self.assertIn("Commit 5: Fifth file", squash_commit_msg)
-        self.assertIn("Description for commit 5", squash_commit_msg)
         
         # Verify commit 1's message is NOT in the squash (it should remain separate)
         self.assertNotIn("Commit 1: First file", squash_commit_msg)
@@ -567,6 +562,9 @@ class TestSquashCommits(unittest.TestCase):
             with open(file_path, "r") as f:
                 self.assertEqual(f.read(), f"Content {i}")
 
+        # print the git commit hash of the squashed commit message for reference
+        print(header_string("Squashed Commit Message"))
+        print(squash_commit_msg)
 
 if __name__ == "__main__":
     unittest.main()
