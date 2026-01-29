@@ -203,17 +203,22 @@ def get_head_commit(repo_path: str) -> str:
     out = exec_cmd(cmd, cwd=repo_path)
     return out.stdout.strip()
 
-def import_meta_repo(monorepo_root_dir: str, metarepo_root_dir: str):
+def import_meta_repo(monorepo_root_dir: str, metarepo_root_dir: str, metarepo_default_branch: str, branches_whitelist: Optional[Set[str]] = None):
     """
     It is expected that both folders are git repositories, and that the metarepo
     is already cloned locally.
     Returns a mapping of branch names to their metarepo commit hashes.
+    branches_whitelist: Optional set of branch names to process. If provided, only these branches
+                       (plus the default branch) will be imported.
     """
     # we set up the metarepo as a remote of the monorepo, and we fetch all its branches.
     global metarepo_name
     print(header_string(f"Importing metarepo {metarepo_name} into monorepo {monorepo_name}"))
-    metarepo_branches = get_all_branches(metarepo_root_dir)
-    print(f"{metarepo_name} branches: {metarepo_branches}")
+    all_metarepo_branches = get_all_branches(metarepo_root_dir)
+    metarepo_branches = filter_branches_with_whitelist(all_metarepo_branches, branches_whitelist, metarepo_default_branch)
+    print(f"{metarepo_name} branches (after whitelist filter): {metarepo_branches}")
+    if branches_whitelist:
+        print(f"  Filtered from {len(all_metarepo_branches)} total branches using whitelist")
     exec_cmd(f"git remote add metarepo {metarepo_root_dir}", cwd=monorepo_root_dir)
     exec_cmd(f"git fetch metarepo '+refs/heads/*:refs/remotes/metarepo/*'", cwd=monorepo_root_dir)
     
@@ -268,12 +273,15 @@ def import_submodule(monorepo_root_dir: str,
                      metarepo_default_branch: str,
                      metarepo_branch_commits: Mapping[str, str],
                      cache: MonorepoCache,
+                     branches_whitelist: Optional[Set[str]] = None,
                      expected_branches: Optional[Set[str]] = None) -> SubmoduleImportInfo:
     """
     It is expected that monorepo_root_dir points to a git repository where the submodule will be imported.
     the submodule will be cloned from submodule_repo_url, and all its branches will be imported under submodule_path in the monorepo.
 
     cache: MonorepoCache to avoid repeated expensive git operations.
+    branches_whitelist: Optional set of branch names to process. If provided, only these branches
+                       (plus the submodule's default branch) will be imported.
 
     metarepo_branches_tracking_submodule: is only used for bookkeeping/reporting purposes, to know which metarepo branches actually tracked this submodule.
     """
@@ -290,9 +298,12 @@ def import_submodule(monorepo_root_dir: str,
         submodule_default_branch = get_head_branch(info_clone_dir)
         report = SubmoduleImportInfo(submodule_path, submodule_default_branch)
 
-        # Get all branches from the fresh clone
-        submodule_branches = set(get_all_branches(info_clone_dir))
+        # Get all branches from the fresh clone and filter them
+        all_submodule_branches = set(get_all_branches(info_clone_dir))
+        submodule_branches = set(filter_branches_with_whitelist(list(all_submodule_branches), branches_whitelist, submodule_default_branch))
         print(f"Found branches for submodule {submodule_path}: {submodule_branches}")
+        if branches_whitelist:
+            print(f"  Filtered from {len(all_submodule_branches)} total branches using whitelist")
         if expected_branches is not None and submodule_branches != expected_branches:
             raise RuntimeError(f"Submodule branches mismatch. Expected: {expected_branches}, Found: {submodule_branches}")
         
@@ -496,14 +507,19 @@ def import_submodule(monorepo_root_dir: str,
                     raise RuntimeError(f"After adding nested submodule {nested_submodule_relative_path_in_monorepo}, its commit hash in {monorepo_name} does not match expected {commit_hash}, got: {ls_tree_out}")
         return report
 
-def get_metarepo_submodules(repo_path: str) -> Set[SubmoduleDef]:
+def get_metarepo_submodules(repo_path: str, metarepo_default_branch: str, branches_whitelist: Optional[Set[str]] = None) -> Set[SubmoduleDef]:
     """
     Scans all branches in the given metarepo,  
     returns a mapping of {submodule -> set of branches that track them in the metarepo}.
+    branches_whitelist: Optional set of branch names to process. If provided, only these branches
+                       (plus the default branch) will be scanned.
     """
-    branches = get_all_branches(repo_path)
+    all_branches = get_all_branches(repo_path)
+    branches = filter_branches_with_whitelist(all_branches, branches_whitelist, metarepo_default_branch)
     result = set()
     print(header_string("Scanning metarepo for submodules"))
+    if branches_whitelist:
+        print(f"Scanning {len(branches)} branches (filtered from {len(all_branches)} using whitelist)")
     for branch in branches:
         print(f"--- Scanning branch {branch} for submodules ---")
         exec_cmd(f"git checkout {branch}", cwd=repo_path)
@@ -518,6 +534,46 @@ class WorkspaceMetadata:
     metarepo_default_branch: str
     dump_template: bool = False
     template_path: Optional[str] = None
+    branches_whitelist: Optional[Set[str]] = None
+
+def load_branches_whitelist(whitelist_path: str) -> Set[str]:
+    """
+    Load branches whitelist from a JSON file.
+    The JSON file should contain a list of branch names.
+    Example: ["feature-1", "feature-2", "bugfix-123"]
+    """
+    try:
+        with open(whitelist_path, "r") as f:
+            whitelist_data = json.load(f)
+        
+        if not isinstance(whitelist_data, list):
+            raise ValueError(f"Branches whitelist must be a JSON list, got {type(whitelist_data)}")
+        
+        for branch in whitelist_data:
+            if not isinstance(branch, str):
+                raise ValueError(f"All branch names in whitelist must be strings, got {type(branch)}: {branch}")
+        
+        return set(whitelist_data)
+    except Exception as e:
+        raise RuntimeError(f"Failed to load branches whitelist from {whitelist_path}: {e}")
+
+
+def filter_branches_with_whitelist(branches: List[str], whitelist: Optional[Set[str]], default_branch: str) -> List[str]:
+    """
+    Filter branches based on whitelist.
+    Always includes the default branch even if not in the whitelist.
+    If whitelist is None, returns all branches.
+    """
+    if whitelist is None:
+        return branches
+    
+    filtered = []
+    for branch in branches:
+        if branch == default_branch or branch in whitelist:
+            filtered.append(branch)
+    
+    return filtered
+
 
 def extract_repo_name_from_url(repo_url: str, default: str) -> str:
     default_is_bad = default is None or len(default) == 0
@@ -587,12 +643,12 @@ def main_flow(params: WorkspaceMetadata) -> MigrationImportInfo:
     report = MigrationImportInfo(metarepo_default_branch, metarepo_name, monorepo_name)
 
     # Import metarepo and get the mapping of branch names to their commit hashes
-    metarepo_branch_commits = import_meta_repo(monorepo_root_dir, metarepo_root_dir)
+    metarepo_branch_commits = import_meta_repo(monorepo_root_dir, metarepo_root_dir, metarepo_default_branch, params.branches_whitelist)
 
     # Some branches in the metarepo may or may not track some submodules
     # So we need to scan all metarepo branches for submodules, to know which ones to import.
     # for each submodule, we will bookkeep which metarepo branches track it.
-    metarepo_tracked_submodules = get_metarepo_submodules(metarepo_root_dir)
+    metarepo_tracked_submodules = get_metarepo_submodules(metarepo_root_dir, metarepo_default_branch, params.branches_whitelist)
 
     if params.dump_template:
         output = dict()
@@ -640,7 +696,7 @@ def main_flow(params: WorkspaceMetadata) -> MigrationImportInfo:
         if not should_consume_submodule_branches(submodule):
             print(f"Skipping import of submodule {submodule.path} as per migration strategy.")
             continue
-        submodule_report = import_submodule(monorepo_root_dir, submodule.url, submodule.path, metarepo_default_branch, metarepo_branch_commits, monorepo_cache)
+        submodule_report = import_submodule(monorepo_root_dir, submodule.url, submodule.path, metarepo_default_branch, metarepo_branch_commits, monorepo_cache, params.branches_whitelist)
         report.add_submodule_entry(submodule.path, submodule_report)
 
     # after all submodules are imported, we can iterate the branches and squash the bookkeeping commits.
@@ -900,6 +956,13 @@ def main():
         action="store_true",
         help="If set, squashes all monomaker commits in the monorepo after migration."
     )
+    parser.add_argument(
+        "--branches-whitelist",
+        dest="branches_whitelist",
+        type=str,
+        default=None,
+        help="Path to a JSON file containing a list of branch names to process. Only these branches (plus default branches) will be imported. Example: [\"feature-1\", \"feature-2\"]"
+    )
     args = parser.parse_args()
     if args.dump_log:
         # redirect stdout to a file
@@ -918,9 +981,18 @@ def main():
         sys.exit(0)
     
     print("start time:", time.ctime())
+    
+    # Load branches whitelist if provided
+    branches_whitelist = None
+    if args.branches_whitelist:
+        print(f"Loading branches whitelist from {args.branches_whitelist} ...")
+        branches_whitelist = load_branches_whitelist(args.branches_whitelist)
+        print(f"Loaded {len(branches_whitelist)} branches from whitelist: {sorted(branches_whitelist)}")
+    
     workspace_params = prepare_workspace(args.metarepo_url, args.monorepo_url)
     workspace_params.dump_template = args.dump_template
     workspace_params.template_path = args.template_path
+    workspace_params.branches_whitelist = branches_whitelist
     migration_report = main_flow(workspace_params)
     end_time = time.monotonic()
     elapsed = end_time - start_time

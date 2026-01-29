@@ -47,6 +47,63 @@ class TestSubmoduleDef(unittest.TestCase):
         paths = {s.path for s in result}
         self.assertEqual(paths, {"lib/foo", "lib/bar"})
 
+
+class TestBranchesWhitelist(unittest.TestCase):
+    """Tests for branches whitelist functionality."""
+    
+    def test_load_branches_whitelist_valid(self):
+        """Test loading a valid whitelist JSON file."""
+        with tempfile.TemporaryDirectory() as tempdir:
+            whitelist_path = os.path.join(tempdir, "whitelist.json")
+            with open(whitelist_path, "w") as f:
+                f.write('["feature-1", "feature-2", "bugfix-123"]')
+            
+            result = merger.load_branches_whitelist(whitelist_path)
+            expected = {"feature-1", "feature-2", "bugfix-123"}
+            self.assertEqual(result, expected)
+    
+    def test_load_branches_whitelist_invalid_format(self):
+        """Test that loading an invalid format raises an error."""
+        with tempfile.TemporaryDirectory() as tempdir:
+            whitelist_path = os.path.join(tempdir, "whitelist.json")
+            with open(whitelist_path, "w") as f:
+                f.write('{"branch": "feature-1"}')  # dict instead of list
+            
+            with self.assertRaises(RuntimeError):
+                merger.load_branches_whitelist(whitelist_path)
+    
+    def test_filter_branches_with_whitelist(self):
+        """Test that filter_branches_with_whitelist correctly filters branches."""
+        branches = ["main", "feature", "bugfix", "hotfix"]
+        whitelist = {"feature", "hotfix"}
+        default_branch = "main"
+        
+        result = merger.filter_branches_with_whitelist(branches, whitelist, default_branch)
+        
+        # Should include default and whitelisted branches
+        self.assertCountEqual(result, ["main", "feature", "hotfix"])
+    
+    def test_filter_branches_no_whitelist(self):
+        """Test that no filtering occurs when whitelist is None."""
+        branches = ["main", "feature", "bugfix", "hotfix"]
+        
+        result = merger.filter_branches_with_whitelist(branches, None, "main")
+        
+        # Should return all branches
+        self.assertEqual(result, branches)
+    
+    def test_filter_branches_default_not_in_whitelist(self):
+        """Test that default branch is always included even if not in whitelist."""
+        branches = ["main", "feature", "bugfix"]
+        whitelist = {"feature"}  # main not in whitelist
+        default_branch = "main"
+        
+        result = merger.filter_branches_with_whitelist(branches, whitelist, default_branch)
+        
+        # Should include default even though not in whitelist
+        self.assertCountEqual(result, ["main", "feature"])
+
+
 def create_and_fill_branch(repo_path: str, branch_content: BranchContent, branch_name: str, default_branch: str):
     """Create a branch and fill it with files as per RepoContent."""
     # switch to the default branch first, to branch off it
@@ -347,7 +404,8 @@ class TestGitOps(unittest.TestCase):
         self.assertEqual(submodules[0].path, self.submodule_relative_path)
 
     def test_merger_import_meta_repo(self):
-        merger.import_meta_repo(self.monorepo_path, self.repo_path)
+        metarepo_default_branch = merger.get_head_branch(self.repo_path)
+        merger.import_meta_repo(self.monorepo_path, self.repo_path, metarepo_default_branch)
         for branch in self.repo_content.branches:
             git_test_ops.switch_branch(self.monorepo_path, branch.name)
             for file in branch.files:
@@ -462,6 +520,78 @@ class TestGitOps(unittest.TestCase):
             )
             self.assertIsNotNone(submodule_only_entry)
             self.assertEqual(submodule_only_entry.metarepo_branch, "main")  # Should use default, not "submodule_only_branch"
+            
+        finally:
+            shutil.rmtree(metarepo_path, ignore_errors=True)
+            shutil.rmtree(submodule_path, ignore_errors=True)
+            shutil.rmtree(monorepo_path, ignore_errors=True)
+
+    def test_branches_whitelist(self):
+        """
+        Test that branches whitelist correctly filters branches while preserving default branches.
+        
+        Scenario:
+        - Metarepo has branches: main, feature, foo, bar
+        - Submodule has branches: main, dev, feature, bar
+        - Whitelist contains: ["foo", "bar"]
+        - Should import: main (default), foo (whitelist), bar (whitelist)
+        - Should skip: feature (not in whitelist, not default)
+        """
+        # Create a simple metarepo
+        metarepo_content = RepoContent(
+            default_branch="main",
+            branches=[
+                BranchContent(name="main", files=[FileContent("meta.txt", "main content", "Add meta.txt")]),
+                BranchContent(name="feature", files=[FileContent("feature.txt", "feature content", "Add feature.txt")]),
+                BranchContent(name="foo", files=[FileContent("foo.txt", "foo content", "Add foo.txt")]),
+                BranchContent(name="bar", files=[FileContent("bar.txt", "bar content", "Add bar.txt")]),
+            ]
+        )
+        metarepo_path = create_temporary_repo(metarepo_content)
+        
+        # Create submodule with various branches
+        submodule_content = RepoContent(
+            default_branch="main",
+            branches=[
+                BranchContent(name="main", files=[FileContent("sub.txt", "sub content", "Add sub.txt")]),
+                BranchContent(name="dev", files=[FileContent("dev.txt", "dev content", "Add dev.txt")]),
+                BranchContent(name="feature", files=[FileContent("feat.txt", "feat content", "Add feat.txt")]),
+                BranchContent(name="bar", files=[FileContent("bar_sub.txt", "bar content", "Add bar_sub.txt")]),
+            ]
+        )
+        submodule_path = create_temporary_repo(submodule_content)
+        
+        # Add submodule to metarepo branches
+        for branch in ["main", "foo", "bar"]:
+            git_test_ops.add_local_submodule(metarepo_path, branch, submodule_path, "the_submodule", "main")
+        git_test_ops.switch_branch(metarepo_path, "main")
+        
+        # Create empty monorepo
+        monorepo_path = tempfile.mkdtemp()
+        git_test_ops.create_repo(monorepo_path, "main")
+        
+        try:
+            # Test with whitelist
+            whitelist = {"foo", "bar"}
+            params = merger.WorkspaceMetadata(
+                monorepo_root_dir=monorepo_path,
+                metarepo_root_dir=metarepo_path,
+                metarepo_default_branch="main",
+                branches_whitelist=whitelist
+            )
+            report = merger.main_flow(params)
+            
+            # Verify only whitelisted branches and default branch are imported
+            monorepo_branches = set(merger.get_all_branches(monorepo_path))
+            expected_branches = {"main", "foo", "bar"}
+            self.assertEqual(monorepo_branches, expected_branches, 
+                           f"Expected branches {expected_branches}, got {monorepo_branches}")
+            
+            # Verify feature branch was NOT imported
+            self.assertNotIn("feature", monorepo_branches)
+            
+            # Verify dev branch was NOT imported (submodule-only, not in whitelist)
+            self.assertNotIn("dev", monorepo_branches)
             
         finally:
             shutil.rmtree(metarepo_path, ignore_errors=True)
