@@ -69,7 +69,17 @@ class TestBranchesWhitelist(unittest.TestCase):
             with open(whitelist_path, "w") as f:
                 f.write('{"branch": "feature-1"}')  # dict instead of list
             
-            with self.assertRaises(RuntimeError):
+            with self.assertRaises(ValueError):
+                merger.load_branches_whitelist(whitelist_path)
+    
+    def test_load_branches_whitelist_non_string_values(self):
+        """Test that loading a whitelist with non-string values raises an error."""
+        with tempfile.TemporaryDirectory() as tempdir:
+            whitelist_path = os.path.join(tempdir, "whitelist.json")
+            with open(whitelist_path, "w") as f:
+                f.write('[1, 2, "feature"]')  # contains numbers
+            
+            with self.assertRaises(ValueError):
                 merger.load_branches_whitelist(whitelist_path)
     
     def test_filter_branches_with_whitelist(self):
@@ -82,6 +92,17 @@ class TestBranchesWhitelist(unittest.TestCase):
         
         # Should include default and whitelisted branches
         self.assertCountEqual(result, ["main", "feature", "hotfix"])
+    
+    def test_filter_branches_empty_whitelist(self):
+        """Test that an empty whitelist results in only the default branch being included."""
+        branches = ["main", "feature", "bugfix", "hotfix"]
+        whitelist = set()  # empty whitelist
+        default_branch = "main"
+        
+        result = merger.filter_branches_with_whitelist(branches, whitelist, default_branch)
+        
+        # Should only include default branch
+        self.assertCountEqual(result, ["main"])
     
     def test_filter_branches_no_whitelist(self):
         """Test that no filtering occurs when whitelist is None."""

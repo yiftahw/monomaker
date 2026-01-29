@@ -545,17 +545,17 @@ def load_branches_whitelist(whitelist_path: str) -> Set[str]:
     try:
         with open(whitelist_path, "r") as f:
             whitelist_data = json.load(f)
-        
-        if not isinstance(whitelist_data, list):
-            raise ValueError(f"Branches whitelist must be a JSON list, got {type(whitelist_data)}")
-        
-        for branch in whitelist_data:
-            if not isinstance(branch, str):
-                raise ValueError(f"All branch names in whitelist must be strings, got {type(branch)}: {branch}")
-        
-        return set(whitelist_data)
-    except Exception as e:
+    except (FileNotFoundError, json.JSONDecodeError) as e:
         raise RuntimeError(f"Failed to load branches whitelist from {whitelist_path}: {e}")
+    
+    if not isinstance(whitelist_data, list):
+        raise ValueError(f"Branches whitelist must be a JSON list, got {type(whitelist_data)}")
+    
+    for branch in whitelist_data:
+        if not isinstance(branch, str):
+            raise ValueError(f"All branch names in whitelist must be strings, got {type(branch)}: {branch}")
+    
+    return set(whitelist_data)
 
 
 def filter_branches_with_whitelist(branches: List[str], whitelist: Optional[Set[str]], default_branch: str) -> List[str]:
