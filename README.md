@@ -22,3 +22,20 @@ For each branch in this set, a corresponding monorepo branch is created: each re
 
 Only **first-layer submodules** are imported in this process.  
 Second-layer (nested) submodules are retained in the monorepo at their original relative paths and commit hashes, preserving their history without flattening.
+
+## Branches Whitelist
+
+For partial runs (e.g., to update just a single branch that was not ported properly or was updated in the old repo), you can use the `--branches-whitelist` option to specify which branches to process.
+
+The whitelist is provided as a path to a JSON file containing a list of branch names:
+
+```json
+["feature-1", "feature-2", "bugfix-123"]
+```
+
+Usage:
+```bash
+python merger.py /path/to/metarepo --branches-whitelist /path/to/whitelist.json
+```
+
+**Important:** The default branch of each submodule and the metarepo are always processed, even if they are not in the whitelist. This ensures all scenarios where some submodule does not contain the feature branch from the whitelist can be handled correctly.
